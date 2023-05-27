@@ -6,8 +6,8 @@ basic:
   admission_config_file: "config/volcano-admission.conf"
   scheduler_config_file: "config/volcano-scheduler.conf"
   image_pull_secret: ""
-  image_pull_policy: "Always"
-  image_tag_version: "latest"
+  image_pull_policy: "IfNotPresent"
+  image_tag_version: "11a5c26145b4d5b0363688a2f63ff8ed6e034d9b"
   admission_port: 8443
 custom:
   metrics_enable: false
@@ -17,7 +17,7 @@ custom:
   controller_replicas: 1
   scheduler_enable: true
   scheduler_replicas: 1
-  leader_elect_enable: false
+  leader_elect_enable: true
   enabled_admissions: "/jobs/mutate,/jobs/validate,/podgroups/mutate,/pods/validate,/pods/mutate,/queues/mutate,/queues/validate"
 
 # Specify affinity for all main Volcano components or per component.
