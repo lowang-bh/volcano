@@ -54,7 +54,7 @@ func TestHDRF(t *testing.T) {
 	flag.Set("alsologtostderr", "true")
 	var tmp *cache.SchedulerCache
 	patches := gomonkey.ApplyMethod(reflect.TypeOf(tmp), "AddBindTask", func(scCache *cache.SchedulerCache, task *api.TaskInfo) error {
-		scCache.Binder.Bind(nil, []*api.TaskInfo{task})
+		scCache.Binder.Bind([]*api.TaskInfo{task})
 		return nil
 	})
 	defer patches.Reset()

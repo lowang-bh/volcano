@@ -104,7 +104,7 @@ func TestProportion(t *testing.T) {
 	c := make(chan bool, 1)
 	var tmp *cache.SchedulerCache
 	patches := gomonkey.ApplyMethod(reflect.TypeOf(tmp), "AddBindTask", func(scCache *cache.SchedulerCache, task *api.TaskInfo) error {
-		scCache.Binder.Bind(nil, []*api.TaskInfo{task})
+		scCache.Binder.Bind([]*api.TaskInfo{task})
 		return nil
 	})
 	defer patches.Reset()

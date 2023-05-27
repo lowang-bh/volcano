@@ -50,7 +50,7 @@ func getWorkerAffinity() *apiv1.Affinity {
 func TestEventHandler(t *testing.T) {
 	var tmp *cache.SchedulerCache
 	patches := gomonkey.ApplyMethod(reflect.TypeOf(tmp), "AddBindTask", func(scCache *cache.SchedulerCache, task *api.TaskInfo) error {
-		scCache.Binder.Bind(nil, []*api.TaskInfo{task})
+		scCache.Binder.Bind([]*api.TaskInfo{task})
 		return nil
 	})
 	defer patches.Reset()
