@@ -89,9 +89,9 @@ func New(config *rest.Config, schedulerNames []string, defaultQueue string, node
 type SchedulerCache struct {
 	sync.Mutex
 
-	kubeClient   *kubernetes.Clientset
+	kubeClient   kubernetes.Interface
 	restConfig   *rest.Config
-	vcClient     *vcclient.Clientset
+	vcClient     vcclient.Interface
 	defaultQueue string
 	// schedulerName is the name for volcano scheduler
 	schedulerNames     []string
@@ -157,8 +157,8 @@ type DefaultBinder struct {
 }
 
 // Bind will send bind request to api server
-func (db *DefaultBinder) Bind(kubeClient kubernetes.Interface, tasks []*schedulingapi.TaskInfo) ([]*schedulingapi.TaskInfo, error) {
-	var errTasks []*schedulingapi.TaskInfo
+func (db *DefaultBinder) Bind(kubeClient kubernetes.Interface, tasks []*schedulingapi.TaskInfo) (succeed, failed []*schedulingapi.TaskInfo) {
+	succeed = make([]*schedulingapi.TaskInfo, 0, len(tasks))
 	for _, task := range tasks {
 		p := task.Pod
 		if err := kubeClient.CoreV1().Pods(p.Namespace).Bind(context.TODO(),
@@ -171,15 +171,13 @@ func (db *DefaultBinder) Bind(kubeClient kubernetes.Interface, tasks []*scheduli
 			},
 			metav1.CreateOptions{}); err != nil {
 			klog.Errorf("Failed to bind pod <%v/%v> to node %s : %#v", p.Namespace, p.Name, task.NodeName, err)
-			errTasks = append(errTasks, task)
+			failed = append(failed, task)
+		} else {
+			succeed = append(succeed, task)
 		}
 	}
 
-	if len(errTasks) > 0 {
-		return errTasks, fmt.Errorf("failed to bind pods")
-	}
-
-	return nil, nil
+	return succeed, failed
 }
 
 func NewBinder() *DefaultBinder {
@@ -187,7 +185,7 @@ func NewBinder() *DefaultBinder {
 }
 
 type defaultEvictor struct {
-	kubeclient *kubernetes.Clientset
+	kubeclient kubernetes.Interface
 	recorder   record.EventRecorder
 }
 
@@ -226,8 +224,8 @@ func (de *defaultEvictor) Evict(p *v1.Pod, reason string) error {
 
 // defaultStatusUpdater is the default implementation of the StatusUpdater interface
 type defaultStatusUpdater struct {
-	kubeclient *kubernetes.Clientset
-	vcclient   *vcclient.Clientset
+	kubeclient kubernetes.Interface
+	vcclient   vcclient.Interface
 }
 
 // following the same logic as podutil.UpdatePodCondition
@@ -345,8 +343,8 @@ func (dvb *defaultVolumeBinder) BindVolumes(task *schedulingapi.TaskInfo, podVol
 }
 
 type podgroupBinder struct {
-	kubeclient *kubernetes.Clientset
-	vcclient   *vcclient.Clientset
+	kubeclient kubernetes.Interface
+	vcclient   vcclient.Interface
 }
 
 // Bind will add silo cluster annotaion on pod and podgroup
@@ -788,23 +786,25 @@ func (sc *SchedulerCache) Evict(taskInfo *schedulingapi.TaskInfo, reason string)
 }
 
 // Bind binds task to the target host.
-func (sc *SchedulerCache) Bind(tasks []*schedulingapi.TaskInfo) error {
+func (sc *SchedulerCache) Bind(tasks []*schedulingapi.TaskInfo) {
 	tmp := time.Now()
-	errTasks, err := sc.Binder.Bind(sc.kubeClient, tasks)
-	if err == nil {
+	succTasks, errTasks := sc.Binder.Bind(sc.kubeClient, tasks)
+	if len(succTasks) != 0 {
 		klog.V(3).Infof("bind ok, latency %v", time.Since(tmp))
-		for _, task := range tasks {
+		for _, task := range succTasks {
 			sc.Recorder.Eventf(task.Pod, v1.EventTypeNormal, "Scheduled", "Successfully assigned %v/%v to %v",
 				task.Namespace, task.Name, task.NodeName)
+
+			metrics.UpdateTaskScheduleDuration(metrics.Duration(task.Pod.CreationTimestamp.Time))
 		}
-	} else {
+	}
+	if len(errTasks) != 0 {
 		for _, task := range errTasks {
 			klog.V(2).Infof("resyncTask task %s", task.Name)
 			sc.VolumeBinder.RevertVolumes(task, task.PodVolumes)
 			sc.resyncTask(task)
 		}
 	}
-	return nil
 }
 
 // BindPodGroup binds job to silo cluster
@@ -1050,14 +1050,7 @@ func (sc *SchedulerCache) BindTask() {
 
 		bindTasks := make([]*schedulingapi.TaskInfo, len(successfulTasks))
 		copy(bindTasks, successfulTasks)
-		if err := sc.Bind(bindTasks); err != nil {
-			klog.Errorf("failed to bind task count %d: %#v", len(bindTasks), err)
-			return
-		}
-
-		for _, task := range successfulTasks {
-			metrics.UpdateTaskScheduleDuration(metrics.Duration(task.Pod.CreationTimestamp.Time))
-		}
+		sc.Bind(bindTasks)
 	}(tmpBindCache)
 	sc.bindCache = sc.bindCache[0:0]
 }

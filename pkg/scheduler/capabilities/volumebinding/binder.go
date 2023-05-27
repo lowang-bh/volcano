@@ -448,6 +448,10 @@ func (b *volumeBinder) BindPodVolumes(ctx context.Context, assumedPod *v1.Pod, p
 		}
 	}()
 
+	if podVolumes == nil {
+		return nil
+	}
+
 	bindings := podVolumes.StaticBindings
 	claimsToProvision := podVolumes.DynamicProvisions
 

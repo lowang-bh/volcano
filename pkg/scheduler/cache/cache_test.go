@@ -17,16 +17,24 @@ limitations under the License.
 package cache
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 
 	"volcano.sh/volcano/pkg/scheduler/api"
+	volumescheduling "volcano.sh/volcano/pkg/scheduler/capabilities/volumebinding"
 	"volcano.sh/volcano/pkg/scheduler/util"
 )
 
@@ -312,5 +320,68 @@ func TestNodeOperation(t *testing.T) {
 			t.Errorf("case %d: \n expected %v, \n got %v \n",
 				i, test.delExpect, cache)
 		}
+	}
+}
+
+func TestBindTasks(t *testing.T) {
+	owner := buildOwnerReference("j1")
+
+	fakeKube := fake.NewSimpleClientset()
+	informerFactory := informers.NewSharedInformerFactory(fakeKube, 0)
+	cache := &SchedulerCache{
+		Jobs:            make(map[api.JobID]*api.JobInfo),
+		Nodes:           make(map[string]*api.NodeInfo),
+		kubeClient:      fakeKube,
+		Recorder:        record.NewFakeRecorder(10),
+		Binder:          &DefaultBinder{},
+		BindFlowChannel: make(chan *api.TaskInfo, 5000),
+		podInformer:     informerFactory.Core().V1().Pods(),
+		nodeInformer:    informerFactory.Core().V1().Nodes(),
+		csiNodeInformer: informerFactory.Storage().V1().CSINodes(),
+		pvcInformer:     informerFactory.Core().V1().PersistentVolumeClaims(),
+		pvInformer:      informerFactory.Core().V1().PersistentVolumes(),
+		scInformer:      informerFactory.Storage().V1().StorageClasses(),
+		errTasks:        workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
+	}
+
+	cache.VolumeBinder = &defaultVolumeBinder{
+		volumeBinder: volumescheduling.NewVolumeBinder(
+			cache.kubeClient,
+			cache.podInformer,
+			cache.nodeInformer,
+			cache.csiNodeInformer,
+			cache.pvcInformer,
+			cache.pvInformer,
+			cache.scInformer,
+			nil,
+			100*time.Millisecond,
+		)}
+
+	ctx, _ := context.WithCancel(context.Background())
+	go wait.Until(cache.processBindTask, time.Millisecond*5, ctx.Done())
+	pod := buildPod("c1", "p1", "", v1.PodPending, buildResourceList("1000m", "1G"), []metav1.OwnerReference{owner}, make(map[string]string))
+	node := buildNode("n1", buildResourceList("2000m", "10G"))
+
+	// make sure pod exist when calling fake client binding
+	fakeKube.CoreV1().Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+	fakeKube.CoreV1().Nodes().Create(ctx, node, metav1.CreateOptions{})
+
+	cache.AddPod(pod)
+	cache.AddNode(node)
+
+	task := api.NewTaskInfo(pod)
+	task.Job = "j1"
+	if err := cache.addTask(task); err != nil {
+		t.Errorf("failed to add task %v", err)
+	}
+	task.NodeName = "n1"
+	err := cache.AddBindTask(task)
+	if err != nil {
+		t.Errorf("failed to bind pod to node: %v", err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	r := cache.Recorder.(*record.FakeRecorder)
+	if len(r.Events) != 1 {
+		t.Fatalf("succesfully binding task should have 1 event")
 	}
 }
