@@ -1,0 +1,4 @@
+#build stage
+FROM alpine:latest
+ADD _output/bin/vc-controller-manager /vc-controller-manager
+ENTRYPOINT ["/vc-controller-manager"]

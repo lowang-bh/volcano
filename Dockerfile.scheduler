@@ -1,0 +1,4 @@
+#build stage
+FROM alpine:latest
+ADD _output/bin/vc-scheduler /vc-scheduler 
+ENTRYPOINT ["/vc-scheduler"]
