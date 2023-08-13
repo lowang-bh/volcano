@@ -181,8 +181,8 @@ func (gp *gangPlugin) OnSessionClose(ssn *framework.Session) {
 			unreadyTaskCount = job.MinAvailable - schedulableTaskNum()
 			msg := fmt.Sprintf("%v/%v tasks in gang unschedulable: %v",
 				unreadyTaskCount, len(job.Tasks), job.FitError())
-			if job.JobFitErrors == "" {
-				job.JobFitErrors = msg
+			if job.JobFitErrors != "" {
+				msg += ", original reason: " + job.JobFitErrors
 			}
 
 			unScheduleJobCount++
@@ -200,7 +200,7 @@ func (gp *gangPlugin) OnSessionClose(ssn *framework.Session) {
 				LastTransitionTime: metav1.Now(),
 				TransitionID:       string(ssn.UID),
 				Reason:             reason,
-				Message:            job.JobFitErrors,
+				Message:            msg,
 			}
 
 			if err := ssn.UpdatePodGroupCondition(job, jc); err != nil {
