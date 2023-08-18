@@ -66,6 +66,7 @@ func (backfill *Action) Execute(ssn *framework.Session) {
 						fe.SetNodeError(ni.Name, err)
 					}
 					job.NodesFitErrors[task.UID] = fe
+					job.JobFitErrors = fe.Error()
 					break
 				}
 
@@ -108,6 +109,7 @@ func (backfill *Action) Execute(ssn *framework.Session) {
 
 				if !allocated {
 					job.NodesFitErrors[task.UID] = fe
+					job.JobFitErrors = fe.Error()
 				}
 			}
 			// TODO (k82cn): backfill for other case.
