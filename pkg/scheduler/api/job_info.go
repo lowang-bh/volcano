@@ -637,8 +637,16 @@ func (ji *JobInfo) FitError() string {
 	if len(reasons) > 0 {
 		reasonMsg += "; " + fmt.Sprintf("%s: %s", Pending.String(), strings.Join(sortReasonsHistogram(reasons), ", "))
 	}
-	if ji.JobFitErrors != "" {
-		reasonMsg += ", original reason: " + ji.JobFitErrors
+	// if ji.JobFitErrors != "" {
+	// 	reasonMsg += ", original reason: " + ji.JobFitErrors
+	// }
+	for _, taskInfo := range ji.Tasks {
+		fitError := ji.NodesFitErrors[taskInfo.UID]
+		if fitError != nil {
+			jobErrMsg := fitError.Error()
+			reasonMsg += fmt.Sprintf("; Origin reason is %v: %v", taskInfo.Name, jobErrMsg)
+			break
+		}
 	}
 	return reasonMsg
 }

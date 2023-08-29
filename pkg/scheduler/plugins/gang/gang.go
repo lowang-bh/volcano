@@ -204,18 +204,6 @@ func (gp *gangPlugin) OnSessionClose(ssn *framework.Session) {
 				klog.Errorf("Failed to update job <%s/%s> condition: %v",
 					job.Namespace, job.Name, err)
 			}
-
-			// allocated task should follow the job fit error
-			for _, taskInfo := range job.TaskStatusIndex[api.Allocated] {
-				fitError := job.NodesFitErrors[taskInfo.UID]
-				if fitError != nil {
-					continue
-				}
-
-				fitError = api.NewFitErrors()
-				job.NodesFitErrors[taskInfo.UID] = fitError
-				fitError.SetError(msg)
-			}
 		} else {
 			jc := &scheduling.PodGroupCondition{
 				Type:               scheduling.PodGroupScheduled,
