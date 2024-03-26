@@ -186,7 +186,7 @@ func (gp *gangPlugin) OnSessionClose(ssn *framework.Session) {
 			metrics.RegisterJobRetries(job.Name)
 
 			reason := scheduling.NotEnoughResourcesReason
-			// if job is rejected to enqueue, record the reason with NotInqueueable, to distinguish from NotEnoughResources
+			// if job is rejected to enqueue, record the reason with Unenqueueable, to distinguish from NotEnoughResources
 			if job.PodGroup.Status.Phase != scheduling.PodGroupInqueue {
 				reason = scheduling.UnEnqueueableReason
 			}
