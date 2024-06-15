@@ -207,3 +207,6 @@ type VictimTasksFn func([]*TaskInfo) []*TaskInfo
 
 // AllocatableFn is the func declaration used to check whether the task can be allocated
 type AllocatableFn func(*QueueInfo, *TaskInfo) bool
+
+// PreemptiveFn is the func declaration used to check whether current job can reclaim resource from other queue
+type PreemptiveFn func(*QueueInfo, *JobInfo) bool

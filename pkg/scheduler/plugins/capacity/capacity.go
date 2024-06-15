@@ -245,18 +245,20 @@ func (cp *capacityPlugin) OnSessionOpen(ssn *framework.Session) {
 		return victims, util.Permit
 	})
 
-	ssn.AddPreemptiveFn(cp.Name(), func(obj interface{}) bool {
-		queue := obj.(*api.QueueInfo)
+	ssn.AddPreemptiveFn(cp.Name(), func(queue *api.QueueInfo, job *api.JobInfo) bool {
 		attr := cp.queueOpts[queue.UID]
 
-		overused := attr.deserved.LessEqual(attr.allocated, api.Zero)
-		metrics.UpdateQueueOverused(attr.name, overused)
-		if overused {
+		minReq := job.GetPendingResources()
+
+		// if queue's used plus current job's required resources will not exceed queue's deserved, then it can reclaim from other queues
+		preemtive := attr.allocated.Clone().Add(minReq).LessEqualWithDimension(attr.deserved, minReq)
+		metrics.UpdateQueueOverused(attr.name, !preemtive)
+		if preemtive {
 			klog.V(3).Infof("Queue <%v> can not reclaim, deserved <%v>, allocated <%v>, share <%v>",
 				queue.Name, attr.deserved, attr.allocated, attr.share)
 		}
 
-		return !overused
+		return preemtive
 	})
 
 	ssn.AddAllocatableFn(cp.Name(), func(queue *api.QueueInfo, candidate *api.TaskInfo) bool {

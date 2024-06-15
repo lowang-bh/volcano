@@ -79,7 +79,19 @@ func Test_capacityPlugin_OnSessionOpen(t *testing.T) {
 	pg6 := util.BuildPodGroup("pg6", "ns1", "q4", 1, nil, schedulingv1beta1.PodGroupInqueue)
 	// queue
 	queue3 := util.BuildQueueWithResourcesQuantity("q3", api.BuildResourceList("2", "4Gi"), nil)
-	queue4 := util.BuildQueueWithResourcesQuantity("q4", api.BuildResourceList("2", "4Gi"), nil)
+	queue4 := util.BuildQueueWithResourcesQuantity("q4", api.BuildResourceList("2", "4Gi", []api.ScalarResource{{Name: "pods", Value: "1"}}...), nil)
+
+	// case: p9 + p10 in queue5 will exceed queue's deserved, is not preemptive
+	p9 := util.BuildPod("ns1", "p9", "n1", corev1.PodRunning, api.BuildResourceList("1", "3Gi"), "pg7", make(map[string]string), nil)
+	p10 := util.BuildPod("ns1", "p10", "", corev1.PodPending, api.BuildResourceList("1", "1Gi"), "pg8", make(map[string]string), nil)
+	p11 := util.BuildPod("ns1", "p11", "n1", corev1.PodRunning, api.BuildResourceList("1", "1Gi"), "pg9", make(map[string]string), nil)
+	// podgroup
+	pg7 := util.BuildPodGroup("pg7", "ns1", "q5", 1, nil, schedulingv1beta1.PodGroupRunning)
+	pg8 := util.BuildPodGroup("pg8", "ns1", "q5", 1, nil, schedulingv1beta1.PodGroupInqueue)
+	pg9 := util.BuildPodGroup("pg9", "ns1", "q6", 1, nil, schedulingv1beta1.PodGroupRunning)
+	// queue
+	queue5 := util.BuildQueueWithResourcesQuantity("q5", api.BuildResourceList("2", "2Gi"), api.BuildResourceList("4", "4Gi"))
+	queue6 := util.BuildQueueWithResourcesQuantity("q6", api.BuildResourceList("0", "0Gi"), api.BuildResourceList("2", "2Gi"))
 
 	tests := []uthelper.TestCommonStruct{
 		{
@@ -104,7 +116,7 @@ func Test_capacityPlugin_OnSessionOpen(t *testing.T) {
 			ExpectBindsNum: 0,
 		},
 		{
-			Name:      "case2: Can reclaim from other queues when allocated < deserved",
+			Name:      "case2: Can reclaim from other queues when allocated + req < deserved",
 			Plugins:   plugins,
 			Pods:      []*corev1.Pod{p5, p6, p7},
 			Nodes:     []*corev1.Node{n1, n2},
@@ -115,6 +127,17 @@ func Test_capacityPlugin_OnSessionOpen(t *testing.T) {
 			},
 			ExpectEvicted:  []string{"ns1/p6"},
 			ExpectEvictNum: 1,
+		},
+		{
+			Name:            "case3: Can not reclaim from other queues when allocated + req > deserved",
+			Plugins:         plugins,
+			Pods:            []*corev1.Pod{p9, p10, p11},
+			Nodes:           []*corev1.Node{n1},
+			PodGroups:       []*schedulingv1beta1.PodGroup{pg7, pg8, pg9},
+			Queues:          []*schedulingv1beta1.Queue{queue5, queue6},
+			ExpectPipeLined: map[string][]string{},
+			ExpectEvicted:   []string{},
+			ExpectEvictNum:  0,
 		},
 	}
 

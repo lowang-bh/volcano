@@ -94,10 +94,6 @@ func (ra *Action) Execute(ssn *framework.Session) {
 			klog.V(3).Infof("Queue <%s> is overused, ignore it.", queue.Name)
 			continue
 		}
-		if !ssn.Preemptive(queue) {
-			klog.V(3).Infof("Queue <%s> can not reclaim by preempt others, ignore it.", queue.Name)
-			continue
-		}
 
 		// Found "high" priority job
 		jobs, found := preemptorsMap[queue.UID]
@@ -105,6 +101,11 @@ func (ra *Action) Execute(ssn *framework.Session) {
 			continue
 		} else {
 			job = jobs.Pop().(*api.JobInfo)
+		}
+
+		if !ssn.Preemptive(queue, job) {
+			klog.V(3).Infof("Queue <%s> can not reclaim by preempt others, ignore it.", queue.Name)
+			continue
 		}
 
 		// Found "high" priority task to reclaim others

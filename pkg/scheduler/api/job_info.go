@@ -493,6 +493,7 @@ func (ji *JobInfo) ParseMinMemberInfo(pg *PodGroup) {
 // GetMinResources return the min resources of podgroup.
 func (ji *JobInfo) GetMinResources() *Resource {
 	if ji.PodGroup.Spec.MinResources == nil {
+		// TODO: when min resources is not set, should calculate it as TasksPriority do in pkg/controllers/job/job_controller_util.go
 		return EmptyResource()
 	}
 
@@ -505,6 +506,17 @@ func (ji *JobInfo) GetElasticResources() *Resource {
 		return EmptyResource()
 	}
 	return ji.Allocated.Clone().Sub(minResource)
+}
+
+// GetPendingResources get the min resources to run the job
+// TODO: need to consider MinAvailable or task MinAvailable
+// after https://github.com/volcano-sh/volcano/pull/3430 merged
+func (ji *JobInfo) GetPendingResources() *Resource {
+	pending := EmptyResource()
+	for _, task := range ji.TaskStatusIndex[Pending] {
+		pending.Add(task.Resreq)
+	}
+	return pending
 }
 
 func (ji *JobInfo) addTaskIndex(ti *TaskInfo) {
