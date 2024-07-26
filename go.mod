@@ -39,10 +39,10 @@ require (
 	sigs.k8s.io/controller-runtime v0.13.0
 	sigs.k8s.io/yaml v1.3.0
 	stathat.com/c/consistent v1.0.0
-	volcano.sh/apis v0.0.0-20230915072424-941bf2d5a745
+	volcano.sh/apis v0.0.0-20240726132435-97a8fb9ff940
 )
 
-replace volcano.sh/apis v0.0.0-20230915072424-941bf2d5a745 => github.com/lowang-bh/apis v0.0.0-20230915072424-941bf2d5a745
+replace volcano.sh/apis v0.0.0-20240726132435-97a8fb9ff940 => github.com/lowang-bh/apis v0.0.0-20240726132435-97a8fb9ff940
 
 require (
 	github.com/NYTimes/gziphandler v1.1.1 // indirect
