@@ -17,8 +17,9 @@ limitations under the License.
 package scheduler
 
 import (
-	"reflect"
 	"testing"
+
+	"k8s.io/apimachinery/pkg/api/equality"
 
 	_ "volcano.sh/volcano/pkg/scheduler/actions"
 	"volcano.sh/volcano/pkg/scheduler/conf"
@@ -50,6 +51,7 @@ tiers:
 					EnabledJobPipelined:  &trueValue,
 					EnabledTaskOrder:     &trueValue,
 					EnabledPreemptable:   &trueValue,
+					EnablePreemptive:     &trueValue,
 					EnabledReclaimable:   &trueValue,
 					EnabledQueueOrder:    &trueValue,
 					EnabledPredicate:     &trueValue,
@@ -70,6 +72,7 @@ tiers:
 					EnabledJobPipelined:  &trueValue,
 					EnabledTaskOrder:     &trueValue,
 					EnabledPreemptable:   &trueValue,
+					EnablePreemptive:     &trueValue,
 					EnabledReclaimable:   &trueValue,
 					EnabledQueueOrder:    &trueValue,
 					EnabledPredicate:     &trueValue,
@@ -90,6 +93,7 @@ tiers:
 					EnabledJobPipelined:  &trueValue,
 					EnabledTaskOrder:     &trueValue,
 					EnabledPreemptable:   &trueValue,
+					EnablePreemptive:     &trueValue,
 					EnabledReclaimable:   &trueValue,
 					EnabledQueueOrder:    &trueValue,
 					EnabledPredicate:     &trueValue,
@@ -114,6 +118,7 @@ tiers:
 					EnabledJobPipelined:  &trueValue,
 					EnabledTaskOrder:     &trueValue,
 					EnabledPreemptable:   &trueValue,
+					EnablePreemptive:     &trueValue,
 					EnabledReclaimable:   &trueValue,
 					EnabledQueueOrder:    &trueValue,
 					EnabledPredicate:     &trueValue,
@@ -134,6 +139,7 @@ tiers:
 					EnabledJobPipelined:  &trueValue,
 					EnabledTaskOrder:     &trueValue,
 					EnabledPreemptable:   &trueValue,
+					EnablePreemptive:     &trueValue,
 					EnabledReclaimable:   &trueValue,
 					EnabledQueueOrder:    &trueValue,
 					EnabledPredicate:     &trueValue,
@@ -154,6 +160,7 @@ tiers:
 					EnabledJobPipelined:  &trueValue,
 					EnabledTaskOrder:     &trueValue,
 					EnabledPreemptable:   &trueValue,
+					EnablePreemptive:     &trueValue,
 					EnabledReclaimable:   &trueValue,
 					EnabledQueueOrder:    &trueValue,
 					EnabledPredicate:     &trueValue,
@@ -174,6 +181,7 @@ tiers:
 					EnabledJobPipelined:  &trueValue,
 					EnabledTaskOrder:     &trueValue,
 					EnabledPreemptable:   &trueValue,
+					EnablePreemptive:     &trueValue,
 					EnabledReclaimable:   &trueValue,
 					EnabledQueueOrder:    &trueValue,
 					EnabledPredicate:     &trueValue,
@@ -193,15 +201,15 @@ tiers:
 
 	var expectedConfigurations []conf.Configuration
 
-	_, tiers, configurations, _, err := unmarshalSchedulerConf(configuration)
+	_, tiers, configurations, _, err := UnmarshalSchedulerConf(configuration)
 	if err != nil {
-		t.Errorf("Failed to load scheduler configuration: %v", err)
+		t.Errorf("Failed to load Scheduler configuration: %v", err)
 	}
-	if !reflect.DeepEqual(tiers, expectedTiers) {
+	if !equality.Semantic.DeepEqual(tiers, expectedTiers) {
 		t.Errorf("Failed to set default settings for plugins, expected: %+v, got %+v",
 			expectedTiers, tiers)
 	}
-	if !reflect.DeepEqual(configurations, expectedConfigurations) {
+	if !equality.Semantic.DeepEqual(configurations, expectedConfigurations) {
 		t.Errorf("Wrong configuration, expected: %+v, got %+v",
 			expectedConfigurations, configurations)
 	}

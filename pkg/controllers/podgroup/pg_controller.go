@@ -17,6 +17,8 @@ limitations under the License.
 package podgroup
 
 import (
+	"slices"
+
 	"k8s.io/apimachinery/pkg/util/wait"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/informers"
@@ -30,13 +32,11 @@ import (
 
 	scheduling "volcano.sh/apis/pkg/apis/scheduling/v1beta1"
 	vcclientset "volcano.sh/apis/pkg/client/clientset/versioned"
-	informerfactory "volcano.sh/apis/pkg/client/informers/externalversions"
 	vcinformer "volcano.sh/apis/pkg/client/informers/externalversions"
 	schedulinginformer "volcano.sh/apis/pkg/client/informers/externalversions/scheduling/v1beta1"
 	schedulinglister "volcano.sh/apis/pkg/client/listers/scheduling/v1beta1"
 	"volcano.sh/volcano/pkg/controllers/framework"
 	"volcano.sh/volcano/pkg/features"
-	commonutil "volcano.sh/volcano/pkg/util"
 )
 
 func init() {
@@ -99,7 +99,7 @@ func (pg *pgcontroller) Initialize(opt *framework.ControllerOption) error {
 		AddFunc: pg.addPod,
 	})
 
-	factory := informerfactory.NewSharedInformerFactory(pg.vcClient, 0)
+	factory := opt.VCSharedInformerFactory
 	pg.vcInformerFactory = factory
 	pg.pgInformer = factory.Scheduling().V1beta1().PodGroups()
 	pg.pgLister = pg.pgInformer.Lister()
@@ -161,7 +161,7 @@ func (pg *pgcontroller) processNextReq() bool {
 		return true
 	}
 
-	if !commonutil.Contains(pg.schedulerNames, pod.Spec.SchedulerName) {
+	if !slices.Contains(pg.schedulerNames, pod.Spec.SchedulerName) {
 		klog.V(5).Infof("pod %v/%v field SchedulerName is not matched", pod.Namespace, pod.Name)
 		return true
 	}
@@ -172,6 +172,7 @@ func (pg *pgcontroller) processNextReq() bool {
 	}
 
 	// normal pod use volcano
+	klog.V(4).Infof("Try to create podgroup for pod %s/%s", pod.Namespace, pod.Name)
 	if err := pg.createNormalPodPGIfNotExist(pod); err != nil {
 		klog.Errorf("Failed to handle Pod <%s/%s>: %v", pod.Namespace, pod.Name, err)
 		pg.queue.AddRateLimited(req)

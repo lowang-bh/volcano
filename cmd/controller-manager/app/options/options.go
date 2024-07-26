@@ -19,8 +19,12 @@ package options
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/pflag"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/component-base/config"
+	componentbaseconfigvalidation "k8s.io/component-base/config/validation"
 
 	"volcano.sh/volcano/pkg/kube"
 )
@@ -33,18 +37,25 @@ const (
 	defaultSchedulerName       = "volcano"
 	defaultHealthzAddress      = ":11251"
 	defaultLockObjectNamespace = "volcano-system"
+	defaultPodGroupWorkers     = 5
+	defaultGCWorkers           = 1
+	defaultControllers         = "*"
 )
 
 // ServerOption is the main context object for the controllers.
 type ServerOption struct {
-	KubeClientOptions    kube.ClientOptions
-	CertFile             string
-	KeyFile              string
-	CertData             []byte
-	KeyData              []byte
-	EnableLeaderElection bool
-	LockObjectNamespace  string
-	PrintVersion         bool
+	KubeClientOptions kube.ClientOptions
+	CertFile          string
+	KeyFile           string
+	CaCertFile        string
+	CertData          []byte
+	KeyData           []byte
+	CaCertData        []byte
+	// leaderElection defines the configuration of leader election.
+	LeaderElection config.LeaderElectionConfiguration
+	// Deprecated: use ResourceNamespace instead.
+	LockObjectNamespace string
+	PrintVersion        bool
 	// WorkerThreads is the number of threads syncing job operations
 	// concurrently. Larger number = faster job updating, but more CPU load.
 	WorkerThreads uint32
@@ -55,7 +66,7 @@ type ServerOption struct {
 	MaxRequeueNum  int
 	SchedulerNames []string
 	// HealthzBindAddress is the IP address and port for the health check server to serve on,
-	// defaulting to 0.0.0.0:11252
+	// defaulting to 0.0.0.0:11251
 	HealthzBindAddress string
 	EnableHealthz      bool
 	// To determine whether inherit owner's annotations for pods when create podgroup
@@ -63,6 +74,16 @@ type ServerOption struct {
 	// WorkerThreadsForPG is the number of threads syncing podgroup operations
 	// The larger the number, the faster the podgroup processing, but requires more CPU load.
 	WorkerThreadsForPG uint32
+	// WorkerThreadsForGC is the number of threads for recycling jobs
+	// The larger the number, the faster the job recycling, but requires more CPU load.
+	WorkerThreadsForGC uint32
+	// Controllers specify controllers to set up.
+	// Case1: Use '*' for all controllers,
+	// Case2: "+gc-controller,+job-controller,+jobflow-controller,+jobtemplate-controller,+pg-controller,+queue-controller"
+	// to enable specific controllers,
+	// Case3: "-gc-controller,-job-controller,-jobflow-controller,-jobtemplate-controller,-pg-controller,-queue-controller"
+	// to disable specific controllers,
+	Controllers []string
 }
 
 type DecryptFunc func(c *ServerOption) error
@@ -73,16 +94,16 @@ func NewServerOption() *ServerOption {
 }
 
 // AddFlags adds flags for a specific CMServer to the specified FlagSet.
-func (s *ServerOption) AddFlags(fs *pflag.FlagSet) {
+func (s *ServerOption) AddFlags(fs *pflag.FlagSet, knownControllers []string) {
 	fs.StringVar(&s.KubeClientOptions.Master, "master", s.KubeClientOptions.Master, "The address of the Kubernetes API server (overrides any value in kubeconfig)")
 	fs.StringVar(&s.KubeClientOptions.KubeConfig, "kubeconfig", s.KubeClientOptions.KubeConfig, "Path to kubeconfig file with authorization and master location information.")
+	fs.StringVar(&s.CaCertFile, "ca-cert-file", s.CaCertFile, "File containing the x509 Certificate for HTTPS.")
 	fs.StringVar(&s.CertFile, "tls-cert-file", s.CertFile, ""+
 		"File containing the default x509 Certificate for HTTPS. (CA cert, if any, concatenated "+
 		"after server cert).")
 	fs.StringVar(&s.KeyFile, "tls-private-key-file", s.KeyFile, "File containing the default x509 private key matching --tls-cert-file.")
-	fs.BoolVar(&s.EnableLeaderElection, "leader-elect", true, "Start a leader election client and gain leadership before "+
-		"executing the main loop. Enable this when running replicated vc-controller-manager for high availability; it is enabled by default")
-	fs.StringVar(&s.LockObjectNamespace, "lock-object-namespace", defaultLockObjectNamespace, "Define the namespace of the lock object; it is volcano-system by default")
+	fs.StringVar(&s.LockObjectNamespace, "lock-object-namespace", defaultLockObjectNamespace, "Define the namespace of the lock object; it is volcano-system by default.")
+	fs.MarkDeprecated("lock-object-namespace", "This flag is deprecated and will be removed in a future release. Please use --leader-elect-resource-namespace instead.")
 	fs.Float32Var(&s.KubeClientOptions.QPS, "kube-api-qps", defaultQPS, "QPS to use while talking with kubernetes apiserver")
 	fs.IntVar(&s.KubeClientOptions.Burst, "kube-api-burst", defaultBurst, "Burst to use while talking with kubernetes apiserver")
 	fs.BoolVar(&s.PrintVersion, "version", false, "Show version and quit")
@@ -93,13 +114,44 @@ func (s *ServerOption) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.HealthzBindAddress, "healthz-address", defaultHealthzAddress, "The address to listen on for the health check server.")
 	fs.BoolVar(&s.EnableHealthz, "enable-healthz", false, "Enable the health check; it is false by default")
 	fs.BoolVar(&s.InheritOwnerAnnotations, "inherit-owner-annotations", true, "Enable inherit owner annotations for pods when create podgroup; it is enabled by default")
-	fs.Uint32Var(&s.WorkerThreadsForPG, "worker-threads-for-podgroup", 1, "The number of threads syncing podgroup operations. The larger the number, the faster the podgroup processing, but requires more CPU load.")
+	fs.Uint32Var(&s.WorkerThreadsForPG, "worker-threads-for-podgroup", defaultPodGroupWorkers, "The number of threads syncing podgroup operations. The larger the number, the faster the podgroup processing, but requires more CPU load.")
+	fs.Uint32Var(&s.WorkerThreadsForGC, "worker-threads-for-gc", defaultGCWorkers, "The number of threads for recycling jobs. The larger the number, the faster the job recycling, but requires more CPU load.")
+	fs.StringSliceVar(&s.Controllers, "controllers", []string{defaultControllers}, fmt.Sprintf("Specify controller gates. Use '*' for all controllers, all knownController: %s ,and we can use "+
+		"'-' to disable controllers, e.g. \"-job-controller,-queue-controller\" to disable job and queue controllers.", knownControllers))
 }
 
-// CheckOptionOrDie checks the LockObjectNamespace.
+// CheckOptionOrDie checks the option and returns error if it's invalid
 func (s *ServerOption) CheckOptionOrDie() error {
-	if s.EnableLeaderElection && s.LockObjectNamespace == "" {
-		return fmt.Errorf("lock-object-namespace must not be nil when LeaderElection is enabled")
+	// check controllers option
+	if err := s.checkControllers(); err != nil {
+		return err
+	}
+	// check leader election flag when LeaderElection is enabled.
+	return componentbaseconfigvalidation.ValidateLeaderElectionConfiguration(&s.LeaderElection, field.NewPath("leaderElection")).ToAggregate()
+}
+
+// checkControllers checks the controllers option and returns error if it's invalid
+func (s *ServerOption) checkControllers() error {
+	existenceMap := make(map[string]bool)
+	for _, c := range s.Controllers {
+		if c == "*" {
+			// wildcard '*' is not allowed to be combined with other input
+			if len(s.Controllers) > 1 {
+				return fmt.Errorf("wildcard '*' cannot be combined with other input")
+			}
+		} else {
+			if strings.HasPrefix(c, "-") || strings.HasPrefix(c, "+") {
+				if existenceMap[c[1:]] {
+					return fmt.Errorf("controllers option %s cannot have both '-' and '+' prefixes", c)
+				}
+				existenceMap[c[1:]] = true
+			} else {
+				if existenceMap[c] {
+					return fmt.Errorf("controllers option %s cannot have both '-' and '+' prefixes", c)
+				}
+				existenceMap[c] = true
+			}
+		}
 	}
 	return nil
 }
@@ -107,6 +159,11 @@ func (s *ServerOption) CheckOptionOrDie() error {
 // readCAFiles read data from ca file path
 func (s *ServerOption) readCAFiles() error {
 	var err error
+
+	s.CaCertData, err = os.ReadFile(s.CaCertFile)
+	if err != nil {
+		return fmt.Errorf("failed to read cacert file (%s): %v", s.CaCertFile, err)
+	}
 
 	s.CertData, err = os.ReadFile(s.CertFile)
 	if err != nil {

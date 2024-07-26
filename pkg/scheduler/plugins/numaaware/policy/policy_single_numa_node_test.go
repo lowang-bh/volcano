@@ -17,14 +17,14 @@ limitations under the License.
 package policy
 
 import (
-	"reflect"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/kubernetes/pkg/kubelet/cm/topologymanager/bitmask"
 )
 
 func Test_single_numa_node_predicate(t *testing.T) {
-	teseCases := []struct {
+	testCases := []struct {
 		name           string
 		providersHints []map[string][]TopologyHint
 		expect         TopologyHint
@@ -278,10 +278,10 @@ func Test_single_numa_node_predicate(t *testing.T) {
 		},
 	}
 
-	for _, testcase := range teseCases {
+	for _, testcase := range testCases {
 		policy := NewPolicySingleNumaNode([]int{0, 1})
 		bestHit, _ := policy.Predicate(testcase.providersHints)
-		if !reflect.DeepEqual(bestHit, testcase.expect) {
+		if !equality.Semantic.DeepEqual(bestHit, testcase.expect) {
 			t.Errorf("%s failed, bestHit= %v\n", testcase.name, bestHit)
 		}
 	}

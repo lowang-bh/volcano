@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -36,16 +35,11 @@ import (
 
 	"volcano.sh/apis/pkg/apis/helpers"
 	vcclientset "volcano.sh/apis/pkg/client/clientset/versioned"
+	informerfactory "volcano.sh/apis/pkg/client/informers/externalversions"
 	"volcano.sh/volcano/cmd/controller-manager/app/options"
 	"volcano.sh/volcano/pkg/controllers/framework"
 	"volcano.sh/volcano/pkg/kube"
 	"volcano.sh/volcano/pkg/signals"
-)
-
-const (
-	leaseDuration = 15 * time.Second
-	renewDeadline = 10 * time.Second
-	retryPeriod   = 5 * time.Second
 )
 
 // Run the controller.
@@ -56,7 +50,7 @@ func Run(opt *options.ServerOption) error {
 	}
 
 	if opt.EnableHealthz {
-		if err := helpers.StartHealthz(opt.HealthzBindAddress, "volcano-controller", opt.CertData, opt.KeyData); err != nil {
+		if err := helpers.StartHealthz(opt.HealthzBindAddress, "volcano-controller", opt.CaCertData, opt.CertData, opt.KeyData); err != nil {
 			return err
 		}
 	}
@@ -65,7 +59,7 @@ func Run(opt *options.ServerOption) error {
 
 	ctx := signals.SetupSignalContext()
 
-	if !opt.EnableLeaderElection {
+	if !opt.LeaderElection.LeaderElect {
 		run(ctx)
 		return fmt.Errorf("finished without leader elect")
 	}
@@ -77,7 +71,7 @@ func Run(opt *options.ServerOption) error {
 
 	// Prepare event clients.
 	broadcaster := record.NewBroadcaster()
-	broadcaster.StartRecordingToSink(&corev1.EventSinkImpl{Interface: leaderElectionClient.CoreV1().Events(opt.LockObjectNamespace)})
+	broadcaster.StartRecordingToSink(&corev1.EventSinkImpl{Interface: leaderElectionClient.CoreV1().Events(opt.LeaderElection.ResourceNamespace)})
 	eventRecorder := broadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "vc-controller-manager"})
 
 	hostname, err := os.Hostname()
@@ -86,10 +80,13 @@ func Run(opt *options.ServerOption) error {
 	}
 	// add a uniquifier so that two processes on the same host don't accidentally both become active
 	id := hostname + "_" + string(uuid.NewUUID())
-
-	rl, err := resourcelock.New(resourcelock.LeasesResourceLock,
-		opt.LockObjectNamespace,
-		"vc-controller-manager",
+	// set ResourceNamespace value to LockObjectNamespace when it's not empty,compatible with old flag
+	if len(opt.LockObjectNamespace) > 0 {
+		opt.LeaderElection.ResourceNamespace = opt.LockObjectNamespace
+	}
+	rl, err := resourcelock.New(opt.LeaderElection.ResourceLock,
+		opt.LeaderElection.ResourceNamespace,
+		opt.LeaderElection.ResourceName,
 		leaderElectionClient.CoreV1(),
 		leaderElectionClient.CoordinationV1(),
 		resourcelock.ResourceLockConfig{
@@ -102,9 +99,9 @@ func Run(opt *options.ServerOption) error {
 
 	leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
 		Lock:          rl,
-		LeaseDuration: leaseDuration,
-		RenewDeadline: renewDeadline,
-		RetryPeriod:   retryPeriod,
+		LeaseDuration: opt.LeaderElection.LeaseDuration.Duration,
+		RenewDeadline: opt.LeaderElection.RenewDeadline.Duration,
+		RetryPeriod:   opt.LeaderElection.RetryPeriod.Duration,
 		Callbacks: leaderelection.LeaderCallbacks{
 			OnStartedLeading: run,
 			OnStoppedLeading: func() {
@@ -126,11 +123,18 @@ func startControllers(config *rest.Config, opt *options.ServerOption) func(ctx c
 	controllerOpt.KubeClient = kubeclientset.NewForConfigOrDie(config)
 	controllerOpt.VolcanoClient = vcclientset.NewForConfigOrDie(config)
 	controllerOpt.SharedInformerFactory = informers.NewSharedInformerFactory(controllerOpt.KubeClient, 0)
+	controllerOpt.VCSharedInformerFactory = informerfactory.NewSharedInformerFactory(controllerOpt.VolcanoClient, 0)
 	controllerOpt.InheritOwnerAnnotations = opt.InheritOwnerAnnotations
 	controllerOpt.WorkerThreadsForPG = opt.WorkerThreadsForPG
+	controllerOpt.WorkerThreadsForGC = opt.WorkerThreadsForGC
 
 	return func(ctx context.Context) {
 		framework.ForeachController(func(c framework.Controller) {
+			// if controller is not enabled, skip it
+			if !isControllerEnabled(c.Name(), opt.Controllers) {
+				klog.Infof("Controller <%s> is not enable", c.Name())
+				return
+			}
 			if err := c.Initialize(controllerOpt); err != nil {
 				klog.Errorf("Failed to initialize controller <%s>: %v", c.Name(), err)
 				return
@@ -141,4 +145,34 @@ func startControllers(config *rest.Config, opt *options.ServerOption) func(ctx c
 
 		<-ctx.Done()
 	}
+}
+
+// isControllerEnabled check if a specified controller enabled or not.
+// If the input controllers starts with a "+name" or "name", it is considered as an explicit inclusion.
+// Otherwise, it is considered as an explicit exclusion.
+func isControllerEnabled(name string, controllers []string) bool {
+	hasStar := false
+	// if no explicit inclusion or exclusion, enable all controllers by default
+	if len(controllers) == 0 {
+		return true
+	}
+	for _, ctrl := range controllers {
+		// if we get here, there was an explicit inclusion
+		if ctrl == name {
+			return true
+		}
+		// if we get here, there was an explicit inclusion
+		if ctrl == "+"+name {
+			return true
+		}
+		// if we get here, there was an explicit exclusion
+		if ctrl == "-"+name {
+			return false
+		}
+		if ctrl == "*" {
+			hasStar = true
+		}
+	}
+	// if we get here, there was no explicit inclusion or exclusion
+	return hasStar
 }

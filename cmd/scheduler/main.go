@@ -21,18 +21,20 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/spf13/pflag"
+	_ "go.uber.org/automaxprocs"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	cliflag "k8s.io/component-base/cli/flag"
+	componentbaseoptions "k8s.io/component-base/config/options"
+	"k8s.io/klog/v2"
+
 	// init pprof server
 	_ "net/http/pprof"
 
-	"github.com/spf13/pflag"
-	_ "go.uber.org/automaxprocs"
-
-	"k8s.io/apimachinery/pkg/util/wait"
-	cliflag "k8s.io/component-base/cli/flag"
-	"k8s.io/klog/v2"
-
 	"volcano.sh/volcano/cmd/scheduler/app"
 	"volcano.sh/volcano/cmd/scheduler/app/options"
+	commonutil "volcano.sh/volcano/pkg/util"
+	"volcano.sh/volcano/pkg/version"
 
 	// Import default actions/plugins.
 	_ "volcano.sh/volcano/pkg/scheduler/actions"
@@ -49,23 +51,35 @@ func main() {
 
 	klog.InitFlags(nil)
 
+	fs := pflag.CommandLine
 	s := options.NewServerOption()
-	s.AddFlags(pflag.CommandLine)
+
+	s.AddFlags(fs)
+	utilfeature.DefaultMutableFeatureGate.AddFlag(fs)
+
+	commonutil.LeaderElectionDefault(&s.LeaderElection)
+	s.LeaderElection.ResourceName = commonutil.GenerateComponentName(s.SchedulerNames)
+	componentbaseoptions.BindLeaderElectionFlags(&s.LeaderElection, fs)
 	s.RegisterOptions()
 
 	cliflag.InitFlags()
+
+	if s.PrintVersion {
+		version.PrintVersionAndExit()
+		return
+	}
+
 	if err := s.CheckOptionOrDie(); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-
-	if s.CertFile != "" && s.KeyFile != "" {
+	if s.CaCertFile != "" && s.CertFile != "" && s.KeyFile != "" {
 		if err := s.ParseCAFiles(nil); err != nil {
 			klog.Fatalf("Failed to parse CA file: %v", err)
 		}
 	}
 
-	go wait.Until(klog.Flush, *logFlushFreq, wait.NeverStop)
+	klog.StartFlushDaemon(*logFlushFreq)
 	defer klog.Flush()
 
 	if err := app.Run(s); err != nil {

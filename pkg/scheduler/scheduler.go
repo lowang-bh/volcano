@@ -18,7 +18,9 @@ package scheduler
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,8 +37,9 @@ import (
 	"volcano.sh/volcano/pkg/scheduler/metrics"
 )
 
-// Scheduler watches for new unscheduled pods for volcano. It attempts to find
-// nodes that they fit on and writes bindings back to the api server.
+// Scheduler represents a "Volcano Scheduler".
+// Scheduler watches for new unscheduled pods(PodGroup) in Volcano.
+// It attempts to find nodes that can accommodate these pods and writes the binding information back to the API server.
 type Scheduler struct {
 	cache          schedcache.Cache
 	schedulerConf  string
@@ -52,38 +55,32 @@ type Scheduler struct {
 	dumper         schedcache.Dumper
 }
 
-// NewScheduler returns a scheduler
-func NewScheduler(
-	config *rest.Config,
-	schedulerNames []string,
-	schedulerConf string,
-	period time.Duration,
-	defaultQueue string,
-	nodeSelectors []string,
-) (*Scheduler, error) {
+// NewScheduler returns a Scheduler
+func NewScheduler(config *rest.Config, opt *options.ServerOption) (*Scheduler, error) {
 	var watcher filewatcher.FileWatcher
-	if schedulerConf != "" {
+	if opt.SchedulerConf != "" {
 		var err error
-		path := filepath.Dir(schedulerConf)
+		path := filepath.Dir(opt.SchedulerConf)
 		watcher, err = filewatcher.NewFileWatcher(path)
 		if err != nil {
-			return nil, fmt.Errorf("failed creating filewatcher for %s: %v", schedulerConf, err)
+			return nil, fmt.Errorf("failed creating filewatcher for %s: %v", opt.SchedulerConf, err)
 		}
 	}
 
-	cache := schedcache.New(config, schedulerNames, defaultQueue, nodeSelectors)
+	cache := schedcache.New(config, opt.SchedulerNames, opt.DefaultQueue, opt.NodeSelector, opt.NodeWorkerThreads, opt.IgnoredCSIProvisioners)
 	scheduler := &Scheduler{
-		schedulerConf:  schedulerConf,
+		schedulerConf:  opt.SchedulerConf,
 		fileWatcher:    watcher,
 		cache:          cache,
-		schedulePeriod: period,
-		dumper:         schedcache.Dumper{Cache: cache},
+		schedulePeriod: opt.SchedulePeriod,
+		dumper:         schedcache.Dumper{Cache: cache, RootDir: opt.CacheDumpFileDir},
 	}
 
 	return scheduler, nil
 }
 
-// Run runs the Scheduler
+// Run initializes and starts the Scheduler. It loads the configuration,
+// initializes the cache, and begins the scheduling process.
 func (pc *Scheduler) Run(stopCh <-chan struct{}) {
 	pc.loadSchedulerConf()
 	go pc.watchSchedulerConf(stopCh)
@@ -91,13 +88,16 @@ func (pc *Scheduler) Run(stopCh <-chan struct{}) {
 	pc.cache.SetMetricsConf(pc.metricsConf)
 	pc.cache.Run(stopCh)
 	pc.cache.WaitForCacheSync(stopCh)
-	klog.V(2).Infof("scheduler completes Initialization and start to run")
+	klog.V(2).Infof("Scheduler completes Initialization and start to run")
 	go wait.Until(pc.runOnce, pc.schedulePeriod, stopCh)
 	if options.ServerOpts.EnableCacheDumper {
 		pc.dumper.ListenForSignal(stopCh)
 	}
+	go runSchedulerSocket()
 }
 
+// runOnce executes a single scheduling cycle. This function is called periodically
+// as defined by the Scheduler's schedule period.
 func (pc *Scheduler) runOnce() {
 	klog.V(4).Infof("Start scheduling ...")
 	scheduleStartTime := time.Now()
@@ -109,7 +109,7 @@ func (pc *Scheduler) runOnce() {
 	configurations := pc.configurations
 	pc.mutex.Unlock()
 
-	//Load configmap to check which action is enabled.
+	// Load ConfigMap to check which action is enabled.
 	conf.EnabledActionMap = make(map[string]bool)
 	for _, action := range actions {
 		conf.EnabledActionMap[action.Name()] = true
@@ -132,35 +132,36 @@ func (pc *Scheduler) loadSchedulerConf() {
 	klog.V(4).Infof("Start loadSchedulerConf ...")
 	defer func() {
 		actions, plugins := pc.getSchedulerConf()
-		klog.V(2).Infof("Successfully loaded scheduler conf, actions: %v, plugins: %v", actions, plugins)
+		klog.V(2).Infof("Successfully loaded Scheduler conf, actions: %v, plugins: %v", actions, plugins)
 	}()
 
 	var err error
 	pc.once.Do(func() {
-		pc.actions, pc.plugins, pc.configurations, pc.metricsConf, err = unmarshalSchedulerConf(defaultSchedulerConf)
+		pc.actions, pc.plugins, pc.configurations, pc.metricsConf, err = UnmarshalSchedulerConf(DefaultSchedulerConf)
 		if err != nil {
-			klog.Errorf("unmarshal scheduler config %s failed: %v", defaultSchedulerConf, err)
+			klog.Errorf("unmarshal Scheduler config %s failed: %v", DefaultSchedulerConf, err)
 			panic("invalid default configuration")
 		}
 	})
 
 	var config string
 	if len(pc.schedulerConf) != 0 {
-		if config, err = readSchedulerConf(pc.schedulerConf); err != nil {
-			klog.Errorf("Failed to read scheduler configuration '%s', using previous configuration: %v",
+		confData, err := os.ReadFile(pc.schedulerConf)
+		if err != nil {
+			klog.Errorf("Failed to read the Scheduler config in '%s', using previous configuration: %v",
 				pc.schedulerConf, err)
 			return
 		}
+		config = strings.TrimSpace(string(confData))
 	}
 
-	actions, plugins, configurations, metricsConf, err := unmarshalSchedulerConf(config)
+	actions, plugins, configurations, metricsConf, err := UnmarshalSchedulerConf(config)
 	if err != nil {
-		klog.Errorf("scheduler config %s is invalid: %v", config, err)
+		klog.Errorf("Scheduler config %s is invalid: %v", config, err)
 		return
 	}
 
 	pc.mutex.Lock()
-	// If it is valid, use the new configuration
 	pc.actions = actions
 	pc.plugins = plugins
 	pc.configurations = configurations
@@ -195,6 +196,7 @@ func (pc *Scheduler) watchSchedulerConf(stopCh <-chan struct{}) {
 			klog.V(4).Infof("watch %s event: %v", pc.schedulerConf, event)
 			if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
 				pc.loadSchedulerConf()
+				pc.cache.SetMetricsConf(pc.metricsConf)
 			}
 		case err, ok := <-errCh:
 			if !ok {

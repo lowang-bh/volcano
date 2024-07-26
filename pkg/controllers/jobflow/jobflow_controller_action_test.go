@@ -18,10 +18,10 @@ package jobflow
 
 import (
 	"context"
-	"reflect"
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	kubeclient "k8s.io/client-go/kubernetes/fake"
@@ -32,6 +32,7 @@ import (
 	"volcano.sh/apis/pkg/apis/helpers"
 	volcanoclient "volcano.sh/apis/pkg/client/clientset/versioned/fake"
 	"volcano.sh/apis/pkg/client/clientset/versioned/scheme"
+	informerfactory "volcano.sh/apis/pkg/client/informers/externalversions"
 	"volcano.sh/volcano/pkg/controllers/framework"
 )
 
@@ -40,13 +41,15 @@ func newFakeController() *jobflowcontroller {
 	kubeClientSet := kubeclient.NewSimpleClientset()
 
 	sharedInformers := informers.NewSharedInformerFactory(kubeClientSet, 0)
+	vcSharedInformers := informerfactory.NewSharedInformerFactory(volcanoClientSet, 0)
 
 	controller := &jobflowcontroller{}
 	opt := &framework.ControllerOption{
-		VolcanoClient:         volcanoClientSet,
-		KubeClient:            kubeClientSet,
-		SharedInformerFactory: sharedInformers,
-		WorkerNum:             3,
+		VolcanoClient:           volcanoClientSet,
+		KubeClient:              kubeClientSet,
+		SharedInformerFactory:   sharedInformers,
+		VCSharedInformerFactory: vcSharedInformers,
+		WorkerNum:               3,
 	}
 
 	controller.Initialize(opt)
@@ -147,6 +150,7 @@ func TestSyncJobFlowFunc(t *testing.T) {
 					ObjectMeta: metav1.ObjectMeta{
 						Name:      getJobName(tt.args.jobFlow.Name, tt.args.jobTemplateList[i].Name),
 						Namespace: tt.args.jobFlow.Namespace,
+						Labels:    map[string]string{CreatedByJobTemplate: GenerateObjectString(tt.args.jobFlow.Namespace, tt.args.jobTemplateList[i].Name)},
 					},
 					Spec: tt.args.jobTemplateList[i].Spec,
 					Status: v1alpha1.JobStatus{
@@ -182,7 +186,7 @@ func TestSyncJobFlowFunc(t *testing.T) {
 					tt.args.jobFlow.Status.JobStatusList[i].RunningHistories[i2].StartTimestamp = metav1.Time{}
 				}
 			}
-			if !reflect.DeepEqual(&tt.args.jobFlow.Status, tt.want.jobFlowStatus) {
+			if !equality.Semantic.DeepEqual(&tt.args.jobFlow.Status, tt.want.jobFlowStatus) {
 				t.Error("not the expected result")
 			}
 		})
@@ -245,7 +249,7 @@ func TestGetRunningHistoriesFunc(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := getRunningHistories(tt.args.jobStatusList, tt.args.job); !reflect.DeepEqual(got, tt.want) {
+			if got := getRunningHistories(tt.args.jobStatusList, tt.args.job); !equality.Semantic.DeepEqual(got, tt.want) {
 				t.Errorf("getRunningHistories() = %v, want %v", got, tt.want)
 			}
 		})
@@ -405,7 +409,7 @@ func TestGetAllJobStatusFunc(t *testing.T) {
 				got.JobStatusList[0].RunningHistories[0].StartTimestamp = metav1.Time{}
 				got.JobStatusList[1].RunningHistories[0].StartTimestamp = metav1.Time{}
 			}
-			if !reflect.DeepEqual(got, tt.want) {
+			if !equality.Semantic.DeepEqual(got, tt.want) {
 				t.Errorf("getAllJobStatus() got = %v, want %v", got, tt.want)
 			}
 		})
@@ -465,10 +469,12 @@ func TestLoadJobTemplateAndSetJobFunc(t *testing.T) {
 					},
 				},
 				Annotations: map[string]string{
-					CreatedByJobTemplate: GetTemplateString("default", "jobtemplate"),
+					CreatedByJobTemplate: GenerateObjectString("default", "jobtemplate"),
+					CreatedByJobFlow:     GenerateObjectString("default", "jobflow"),
 				},
 				Labels: map[string]string{
-					CreatedByJobTemplate: GetTemplateString("default", "jobtemplate"),
+					CreatedByJobTemplate: GenerateObjectString("default", "jobtemplate"),
+					CreatedByJobFlow:     GenerateObjectString("default", "jobflow"),
 				},
 				Err: nil,
 			},
@@ -485,13 +491,13 @@ func TestLoadJobTemplateAndSetJobFunc(t *testing.T) {
 			if got := fakeController.loadJobTemplateAndSetJob(tt.args.jobFlow, tt.args.flowName, tt.args.jobName, tt.args.job); got != tt.want.Err {
 				t.Error("Expected loadJobTemplateAndSetJob() return nil, but not nil")
 			}
-			if !reflect.DeepEqual(tt.args.job.OwnerReferences, tt.want.OwnerReference) {
+			if !equality.Semantic.DeepEqual(tt.args.job.OwnerReferences, tt.want.OwnerReference) {
 				t.Error("not expected job OwnerReferences")
 			}
-			if !reflect.DeepEqual(tt.args.job.Annotations, tt.want.Annotations) {
+			if !equality.Semantic.DeepEqual(tt.args.job.Annotations, tt.want.Annotations) {
 				t.Error("not expected job Annotations")
 			}
-			if !reflect.DeepEqual(tt.args.job.Labels, tt.want.Labels) {
+			if !equality.Semantic.DeepEqual(tt.args.job.Labels, tt.want.Labels) {
 				t.Error("not expected job Annotations")
 			}
 		})

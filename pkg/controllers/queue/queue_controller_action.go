@@ -19,9 +19,9 @@ package queue
 import (
 	"context"
 	"fmt"
-	"reflect"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
@@ -67,9 +67,15 @@ func (c *queuecontroller) syncQueue(queue *schedulingv1beta1.Queue, updateStateF
 	}
 
 	queueStatus.Allocated = queue.Status.Allocated.DeepCopy()
+	// queue.status.allocated will be updated after every session close in volcano scheduler, we should not depend on it because session may be time-consuming,
+	// and queue.status.allocated can't be updated timely. We initialize queue.status.allocated and update it here explicitly
+	// to avoid update queue err because update will fail when queue.status.allocated is nil.
+	if queueStatus.Allocated == nil {
+		queueStatus.Allocated = v1.ResourceList{}
+	}
 
 	// ignore update when status does not change
-	if reflect.DeepEqual(queueStatus, queue.Status) {
+	if equality.Semantic.DeepEqual(queueStatus, queue.Status) {
 		return nil
 	}
 

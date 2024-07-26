@@ -19,6 +19,7 @@ package api
 import (
 	"fmt"
 	"strconv"
+	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
@@ -93,7 +94,7 @@ type NodeInfo struct {
 //
 // That is current idle resources plus released resources minus pipelined resources.
 func (ni *NodeInfo) FutureIdle() *Resource {
-	return ni.Idle.Clone().Add(ni.Releasing).Sub(ni.Pipelined)
+	return ni.Idle.Clone().Add(ni.Releasing).SubWithoutAssert(ni.Pipelined)
 }
 
 // GetNodeAllocatable return node Allocatable without OversubscriptionResource resource
@@ -109,6 +110,7 @@ type NodeState struct {
 
 // NodeUsage defines the real load usage of node
 type NodeUsage struct {
+	MetricsTime time.Time
 	CPUUsageAvg map[string]float64
 	MEMUsageAvg map[string]float64
 }
@@ -118,6 +120,7 @@ func (nu *NodeUsage) DeepCopy() *NodeUsage {
 		CPUUsageAvg: make(map[string]float64),
 		MEMUsageAvg: make(map[string]float64),
 	}
+	newUsage.MetricsTime = nu.MetricsTime
 	for k, v := range nu.CPUUsageAvg {
 		newUsage.CPUUsageAvg[k] = v
 	}
@@ -342,11 +345,12 @@ func (ni *NodeInfo) SetNode(node *v1.Node) {
 
 // setNodeOthersResource initialize sharable devices
 func (ni *NodeInfo) setNodeOthersResource(node *v1.Node) {
-	IgnoredDevicesList = []string{}
 	ni.Others[GPUSharingDevice] = gpushare.NewGPUDevices(ni.Name, node)
 	ni.Others[vgpu.DeviceName] = vgpu.NewGPUDevices(ni.Name, node)
-	IgnoredDevicesList = append(IgnoredDevicesList, ni.Others[GPUSharingDevice].(Devices).GetIgnoredDevices()...)
-	IgnoredDevicesList = append(IgnoredDevicesList, ni.Others[vgpu.DeviceName].(Devices).GetIgnoredDevices()...)
+	IgnoredDevicesList.Set(
+		ni.Others[GPUSharingDevice].(Devices).GetIgnoredDevices(),
+		ni.Others[vgpu.DeviceName].(Devices).GetIgnoredDevices(),
+	)
 }
 
 // setNode sets kubernetes node object to nodeInfo object without assertion

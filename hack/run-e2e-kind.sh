@@ -23,25 +23,20 @@ export SHOW_VOLCANO_LOGS=${SHOW_VOLCANO_LOGS:-1}
 export CLEANUP_CLUSTER=${CLEANUP_CLUSTER:-1}
 export E2E_TYPE=${E2E_TYPE:-"ALL"}
 
-if [[ "${CLUSTER_NAME}xxx" == "xxx" ]];then
-    CLUSTER_NAME="integration"
-fi
+NAMESPACE=${NAMESPACE:-volcano-system}
+CLUSTER_NAME=${CLUSTER_NAME:-integration}
 
 export CLUSTER_CONTEXT="--name ${CLUSTER_NAME}"
 
 export KIND_OPT=${KIND_OPT:="--config ${VK_ROOT}/hack/e2e-kind-config.yaml"}
 
-function get-k8s-server-version {
-    echo $(kubectl version --short=true | grep Server | sed "s/.*: v//" | tr "." " ")
-}
 
 function install-volcano {
   install-helm
 
   # judge crd version
-  serverVersion=($(get-k8s-server-version))
-  major=${serverVersion[0]}
-  minor=${serverVersion[1]}
+  major=$(kubectl version --output yaml | awk '/serverVersion/,0' |grep -E 'major:' | awk '{print $2}' | tr "\"" " ")
+  minor=$(kubectl version --output yaml | awk '/serverVersion/,0' |grep -E 'minor:' | awk '{print $2}' | tr "\"" " ")
   crd_version="v1"
   # if k8s version less than v1.18, crd version use v1beta
   if [ "$major" -le "1" ]; then
@@ -54,7 +49,7 @@ function install-volcano {
   kubectl apply -f installer/namespace.yaml
 
   echo "Install volcano chart with crd version $crd_version"
-  helm install ${CLUSTER_NAME} installer/helm/chart/volcano --namespace volcano-system --kubeconfig ${KUBECONFIG} \
+  helm install ${CLUSTER_NAME} installer/helm/chart/volcano --namespace ${NAMESPACE} --kubeconfig ${KUBECONFIG} \
     --set basic.image_pull_policy=IfNotPresent \
     --set basic.image_tag_version=${TAG} \
     --set basic.scheduler_config_file=config/volcano-scheduler-ci.conf \
@@ -63,15 +58,28 @@ function install-volcano {
 }
 
 function uninstall-volcano {
-  helm uninstall ${CLUSTER_NAME} -n kube-system
+  helm uninstall ${CLUSTER_NAME} -n ${NAMESPACE}
 }
 
 function generate-log {
     echo "Generating volcano log files"
-    kubectl logs deployment/${CLUSTER_NAME}-admission -n kube-system > volcano-admission.log
-    kubectl logs deployment/${CLUSTER_NAME}-controllers -n kube-system > volcano-controller.log
-    kubectl logs deployment/${CLUSTER_NAME}-scheduler -n kube-system > volcano-scheduler.log
+    kubectl logs deployment/${CLUSTER_NAME}-admission -n ${NAMESPACE} > volcano-admission.log
+    kubectl logs deployment/${CLUSTER_NAME}-controllers -n ${NAMESPACE} > volcano-controller.log
+    kubectl logs deployment/${CLUSTER_NAME}-scheduler -n ${NAMESPACE} > volcano-scheduler.log
 }
+
+function show-log() {
+  log_files=("volcano-admission.log" "volcano-controller.log" "volcano-scheduler.log")
+  for log_file in "${log_files[@]}"; do
+    if [ -f "$log_file" ]; then
+      echo "Showing ${log_file}..."
+      cat "$log_file"
+    else
+      echo "${log_file} not found"
+    fi
+  done
+}
+
 
 # clean up
 function cleanup {
@@ -81,8 +89,7 @@ function cleanup {
   kind delete cluster ${CLUSTER_CONTEXT}
 
   if [[ ${SHOW_VOLCANO_LOGS} -eq 1 ]]; then
-    #TODO: Add volcano logs support in future.
-    echo "Volcano logs are currently not supported."
+    show-log
   fi
 }
 
@@ -126,35 +133,35 @@ install-ginkgo-if-not-exist
 case ${E2E_TYPE} in
 "ALL")
     echo "Running e2e..."
-    KUBECONFIG=${KUBECONFIG} ginkgo -r --nodes=4 --compilers=4 --randomize-all --randomize-suites --fail-on-pending --cover --trace --race --slow-spec-threshold='30s' --progress ./test/e2e/jobp/
-    KUBECONFIG=${KUBECONFIG} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/jobseq/
-    KUBECONFIG=${KUBECONFIG} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/schedulingbase/
-    KUBECONFIG=${KUBECONFIG} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/schedulingaction/
-    KUBECONFIG=${KUBECONFIG} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/vcctl/
+    KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --nodes=4 --compilers=4 --randomize-all --randomize-suites --fail-on-pending --cover --trace --race --slow-spec-threshold='30s' --progress ./test/e2e/jobp/
+    KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/jobseq/
+    KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/schedulingbase/
+    KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/schedulingaction/
+    KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/vcctl/
     ;;
 "JOBP")
     echo "Running parallel job e2e suite..."
-    KUBECONFIG=${KUBECONFIG} ginkgo -r --nodes=4 --compilers=4 --randomize-all --randomize-suites --fail-on-pending --cover --trace --race --slow-spec-threshold='30s' --progress ./test/e2e/jobp/
+    KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --nodes=4 --compilers=4 --randomize-all --randomize-suites --fail-on-pending --cover --trace --race --slow-spec-threshold='30s' --progress ./test/e2e/jobp/
     ;;
 "JOBSEQ")
     echo "Running sequence job e2e suite..."
-    KUBECONFIG=${KUBECONFIG} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/jobseq/
+    KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/jobseq/
     ;;
 "SCHEDULINGBASE")
     echo "Running scheduling base e2e suite..."
-    KUBECONFIG=${KUBECONFIG} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/schedulingbase/
+    KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/schedulingbase/
     ;;
 "SCHEDULINGACTION")
     echo "Running scheduling action e2e suite..."
-    KUBECONFIG=${KUBECONFIG} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/schedulingaction/
+    KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/schedulingaction/
     ;;
 "VCCTL")
     echo "Running vcctl e2e suite..."
-    KUBECONFIG=${KUBECONFIG} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/vcctl/
+    KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/vcctl/
     ;;
 "STRESS")
     echo "Running stress e2e suite..."
-    KUBECONFIG=${KUBECONFIG} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/stress/
+    KUBECONFIG=${KUBECONFIG} GOOS=${OS} ginkgo -r --slow-spec-threshold='30s' --progress ./test/e2e/stress/
     ;;
 esac
 

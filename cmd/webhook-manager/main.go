@@ -24,13 +24,12 @@ import (
 	"github.com/spf13/pflag"
 	_ "go.uber.org/automaxprocs"
 
-	"k8s.io/apimachinery/pkg/util/wait"
 	cliflag "k8s.io/component-base/cli/flag"
 	"k8s.io/klog/v2"
 
 	"volcano.sh/volcano/cmd/webhook-manager/app"
 	"volcano.sh/volcano/cmd/webhook-manager/app/options"
-
+	"volcano.sh/volcano/pkg/version"
 	_ "volcano.sh/volcano/pkg/webhooks/admission/jobs/mutate"
 	_ "volcano.sh/volcano/pkg/webhooks/admission/jobs/validate"
 	_ "volcano.sh/volcano/pkg/webhooks/admission/podgroups/mutate"
@@ -51,7 +50,12 @@ func main() {
 
 	cliflag.InitFlags()
 
-	go wait.Until(klog.Flush, *logFlushFreq, wait.NeverStop)
+	if config.PrintVersion {
+		version.PrintVersionAndExit()
+		return
+	}
+
+	klog.StartFlushDaemon(*logFlushFreq)
 	defer klog.Flush()
 
 	if err := config.CheckPortOrDie(); err != nil {

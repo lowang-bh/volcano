@@ -25,7 +25,7 @@ import (
 	"volcano.sh/volcano/pkg/controllers/apis"
 )
 
-func (jf *jobflowcontroller) enqueue(req *apis.FlowRequest) {
+func (jf *jobflowcontroller) enqueue(req apis.FlowRequest) {
 	jf.queue.Add(req)
 }
 
@@ -36,7 +36,8 @@ func (jf *jobflowcontroller) addJobFlow(obj interface{}) {
 		return
 	}
 
-	req := &apis.FlowRequest{
+	// use struct instead of pointer
+	req := apis.FlowRequest{
 		Namespace:   jobFlow.Namespace,
 		JobFlowName: jobFlow.Name,
 
@@ -50,13 +51,13 @@ func (jf *jobflowcontroller) addJobFlow(obj interface{}) {
 func (jf *jobflowcontroller) updateJobFlow(oldObj, newObj interface{}) {
 	oldJobFlow, ok := oldObj.(*jobflowv1alpha1.JobFlow)
 	if !ok {
-		klog.Errorf("Failed to convert %v to vcjob", oldJobFlow)
+		klog.Errorf("Failed to convert %v to jobflow", oldJobFlow)
 		return
 	}
 
 	newJobFlow, ok := newObj.(*jobflowv1alpha1.JobFlow)
 	if !ok {
-		klog.Errorf("Failed to convert %v to vcjob", newJobFlow)
+		klog.Errorf("Failed to convert %v to jobflow", newJobFlow)
 		return
 	}
 
@@ -69,7 +70,7 @@ func (jf *jobflowcontroller) updateJobFlow(oldObj, newObj interface{}) {
 		return
 	}
 
-	req := &apis.FlowRequest{
+	req := apis.FlowRequest{
 		Namespace:   newJobFlow.Namespace,
 		JobFlowName: newJobFlow.Name,
 
@@ -107,12 +108,12 @@ func (jf *jobflowcontroller) updateJob(oldObj, newObj interface{}) {
 		return
 	}
 
-	req := &apis.FlowRequest{
+	req := apis.FlowRequest{
 		Namespace:   newJob.Namespace,
 		JobFlowName: jobFlowName,
 		Action:      jobflowv1alpha1.SyncJobFlowAction,
 		Event:       jobflowv1alpha1.OutOfSyncEvent,
 	}
 
-	jf.queue.Add(req)
+	jf.enqueueJobFlow(req)
 }

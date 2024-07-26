@@ -18,7 +18,7 @@ package jobtemplate
 
 import (
 	"context"
-	"reflect"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,8 +27,8 @@ import (
 
 	"volcano.sh/apis/pkg/apis/batch/v1alpha1"
 	jobflowv1alpha1 "volcano.sh/apis/pkg/apis/flow/v1alpha1"
-
 	volcanoclient "volcano.sh/apis/pkg/client/clientset/versioned/fake"
+	informerfactory "volcano.sh/apis/pkg/client/informers/externalversions"
 	"volcano.sh/volcano/pkg/controllers/framework"
 )
 
@@ -37,13 +37,15 @@ func newFakeController() *jobtemplatecontroller {
 	kubeClientSet := kubeclient.NewSimpleClientset()
 
 	sharedInformers := informers.NewSharedInformerFactory(kubeClientSet, 0)
+	vcSharedInformers := informerfactory.NewSharedInformerFactory(volcanoClientSet, 0)
 
 	controller := &jobtemplatecontroller{}
 	opt := &framework.ControllerOption{
-		VolcanoClient:         volcanoClientSet,
-		KubeClient:            kubeClientSet,
-		SharedInformerFactory: sharedInformers,
-		WorkerNum:             3,
+		VolcanoClient:           volcanoClientSet,
+		KubeClient:              kubeClientSet,
+		SharedInformerFactory:   sharedInformers,
+		VCSharedInformerFactory: vcSharedInformers,
+		WorkerNum:               3,
 	}
 
 	controller.Initialize(opt)
@@ -115,7 +117,7 @@ func TestSyncJobTemplateFunc(t *testing.T) {
 			if got := fakeController.syncJobTemplate(tt.args.jobTemplate); got != tt.want.err {
 				t.Error("Expected deleteAllJobsCreateByJobFlow() return nil, but not nil")
 			}
-			if !reflect.DeepEqual(&tt.args.jobTemplate.Status, tt.want.jobTemplateStatus) {
+			if !equality.Semantic.DeepEqual(&tt.args.jobTemplate.Status, tt.want.jobTemplateStatus) {
 				t.Error("not the expected result")
 			}
 		})

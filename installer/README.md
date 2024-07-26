@@ -98,6 +98,8 @@ The following are the list configurable parameters of Volcano Chart and their de
 |`custom.scheduler_enable`|Whether to Enable Scheduler|`true`|
 |`custom.scheduler_replicas`|The number of Scheduler pods to run|`1`|
 |`custom.leader_elect_enable`|Whether to Enable leader elect|`false`|
+|`custom.admission_config_override`|Override admission configmap|`~`|
+|`custom.scheduler_config_override`|Override scheduler configmap|`~`|
 |`custom.default_affinity`|Default affinity for Admission/Controller/Scheduler pods|`~`|
 |`custom.admission_affinity`|Affinity for Admission pods|`~`|
 |`custom.controller_affinity`|Affinity for Controller pods|`~`|
@@ -120,9 +122,11 @@ The following are the list configurable parameters of Volcano Chart and their de
 |`custom.admission_labels`|Labels for Admission deployment and job|`~`|
 |`custom.controller_labels`|Labels for Controller deployment|`~`|
 |`custom.scheduler_labels`|Labels for Scheduler deployment|`~`|
+|`custom.common_labels`|Labels for all chart objects except for CRDs |`~`|
 |`custom.admission_resources`|Resources for Admission pods|`~`|
 |`custom.controller_resources`|Resources for Controller pods|`~`|
 |`custom.scheduler_resources`|Resources for Scheduler pods|`~`|
+|`custom.webhooks_namespace_selector_expressions`|Additional namespace selector expressions for Volcano admission webhooks|`~`|
 
 Specify each parameter using the `--set key=value[,key=value]` argument to `helm install`. For example,
 

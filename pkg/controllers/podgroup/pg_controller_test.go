@@ -18,10 +18,10 @@ package podgroup
 
 import (
 	"context"
-	"reflect"
 	"testing"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/informers"
@@ -29,6 +29,7 @@ import (
 
 	scheduling "volcano.sh/apis/pkg/apis/scheduling/v1beta1"
 	vcclient "volcano.sh/apis/pkg/client/clientset/versioned/fake"
+	informerfactory "volcano.sh/apis/pkg/client/informers/externalversions"
 	"volcano.sh/volcano/pkg/controllers/framework"
 )
 
@@ -36,13 +37,15 @@ func newFakeController() *pgcontroller {
 	kubeClient := kubeclient.NewSimpleClientset()
 	vcClient := vcclient.NewSimpleClientset()
 	sharedInformers := informers.NewSharedInformerFactory(kubeClient, 0)
+	vcSharedInformers := informerfactory.NewSharedInformerFactory(vcClient, 0)
 
 	controller := &pgcontroller{}
 	opt := &framework.ControllerOption{
-		KubeClient:            kubeClient,
-		VolcanoClient:         vcClient,
-		SharedInformerFactory: sharedInformers,
-		SchedulerNames:        []string{"volcano"},
+		KubeClient:              kubeClient,
+		VolcanoClient:           vcClient,
+		SharedInformerFactory:   sharedInformers,
+		VCSharedInformerFactory: vcSharedInformers,
+		SchedulerNames:          []string{"volcano"},
 	}
 
 	controller.Initialize(opt)
@@ -166,7 +169,7 @@ func TestAddPodGroup(t *testing.T) {
 			t.Errorf("Case %s failed when getting podGroup for %v", testCase.name, err)
 		}
 
-		if false == reflect.DeepEqual(pg.OwnerReferences, testCase.expectedPodGroup.OwnerReferences) {
+		if false == equality.Semantic.DeepEqual(pg.OwnerReferences, testCase.expectedPodGroup.OwnerReferences) {
 			t.Errorf("Case %s failed, expect %v, got %v", testCase.name, testCase.expectedPodGroup, pg)
 		}
 

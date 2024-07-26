@@ -20,8 +20,6 @@ import (
 	"context"
 	"testing"
 
-	"volcano.sh/volcano/cmd/scheduler/app/options"
-
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/stretchr/testify/assert"
@@ -30,13 +28,16 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/klog/v2/ktesting"
 	"k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/framework"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/feature"
 	"k8s.io/kubernetes/pkg/scheduler/framework/runtime"
+	tf "k8s.io/kubernetes/pkg/scheduler/testing/framework"
+
+	"volcano.sh/volcano/cmd/scheduler/app/options"
 )
 
 var (
@@ -87,6 +88,7 @@ func TestVolumeBinding(t *testing.T) {
 		wantStateAfterPreFilter *stateData
 		wantFilterStatus        []*framework.Status
 		wantScores              []int64
+		wantPreScoreStatus      *framework.Status
 	}{
 		{
 			name: "pod has not pvcs",
@@ -98,9 +100,7 @@ func TestVolumeBinding(t *testing.T) {
 			wantFilterStatus: []*framework.Status{
 				nil,
 			},
-			wantScores: []int64{
-				0,
-			},
+			wantPreScoreStatus: framework.NewStatus(framework.Skip),
 		},
 		{
 			name: "all bound",
@@ -127,9 +127,7 @@ func TestVolumeBinding(t *testing.T) {
 			wantFilterStatus: []*framework.Status{
 				nil,
 			},
-			wantScores: []int64{
-				0,
-			},
+			wantPreScoreStatus: framework.NewStatus(framework.Skip),
 		},
 		{
 			name: "all bound with local volumes",
@@ -150,7 +148,7 @@ func TestVolumeBinding(t *testing.T) {
 				}).PersistentVolume,
 			},
 			wantPreFilterResult: &framework.PreFilterResult{
-				NodeNames: sets.NewString("node-a"),
+				NodeNames: sets.New("node-a"),
 			},
 			wantStateAfterPreFilter: &stateData{
 				podVolumeClaims: &PodVolumeClaims{
@@ -166,9 +164,7 @@ func TestVolumeBinding(t *testing.T) {
 			wantFilterStatus: []*framework.Status{
 				nil,
 			},
-			wantScores: []int64{
-				0,
-			},
+			wantPreScoreStatus: framework.NewStatus(framework.Skip),
 		},
 		{
 			name: "PVC does not exist",
@@ -241,9 +237,7 @@ func TestVolumeBinding(t *testing.T) {
 			wantFilterStatus: []*framework.Status{
 				framework.NewStatus(framework.UnschedulableAndUnresolvable, string(ErrReasonBindConflict)),
 			},
-			wantScores: []int64{
-				0,
-			},
+			wantPreScoreStatus: framework.NewStatus(framework.Skip),
 		},
 		{
 			name: "bound and unbound unsatisfied",
@@ -281,9 +275,7 @@ func TestVolumeBinding(t *testing.T) {
 			wantFilterStatus: []*framework.Status{
 				framework.NewStatus(framework.UnschedulableAndUnresolvable, string(ErrReasonNodeConflict), string(ErrReasonBindConflict)),
 			},
-			wantScores: []int64{
-				0,
-			},
+			wantPreScoreStatus: framework.NewStatus(framework.Skip),
 		},
 		{
 			name: "pvc not found",
@@ -322,9 +314,7 @@ func TestVolumeBinding(t *testing.T) {
 			wantFilterStatus: []*framework.Status{
 				framework.NewStatus(framework.UnschedulableAndUnresolvable, `node(s) unavailable due to one or more pvc(s) bound to non-existent pv(s)`),
 			},
-			wantScores: []int64{
-				0,
-			},
+			wantPreScoreStatus: framework.NewStatus(framework.Skip),
 		},
 		{
 			name: "pv not found claim lost",
@@ -786,7 +776,8 @@ func TestVolumeBinding(t *testing.T) {
 	}
 	for _, item := range table {
 		t.Run(item.name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			_, ctx := ktesting.NewTestContext(t)
+			ctx, cancel := context.WithCancel(ctx)
 			defer cancel()
 			client := fake.NewSimpleClientset()
 			informerFactory := informers.NewSharedInformerFactory(client, 0)
@@ -794,7 +785,7 @@ func TestVolumeBinding(t *testing.T) {
 				runtime.WithClientSet(client),
 				runtime.WithInformerFactory(informerFactory),
 			}
-			fh, err := runtime.NewFramework(nil, nil, wait.NeverStop, opts...)
+			fh, err := runtime.NewFramework(ctx, nil, nil, opts...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -810,7 +801,7 @@ func TestVolumeBinding(t *testing.T) {
 				}
 			}
 
-			pl, err := New(args, fh, item.fts)
+			pl, err := New(ctx, args, fh, item.fts)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -880,6 +871,15 @@ func TestVolumeBinding(t *testing.T) {
 			for i, nodeInfo := range nodeInfos {
 				gotStatus := p.Filter(ctx, state, item.pod, nodeInfo)
 				assert.Equal(t, item.wantFilterStatus[i], gotStatus)
+			}
+
+			t.Logf("Verify: call PreScore and check status")
+			gotPreScoreStatus := p.PreScore(ctx, state, item.pod, tf.BuildNodeInfos(item.nodes))
+			if diff := cmp.Diff(item.wantPreScoreStatus, gotPreScoreStatus); diff != "" {
+				t.Errorf("state got after prescore does not match (-want,+got):\n%s", diff)
+			}
+			if !gotPreScoreStatus.IsSuccess() {
+				return
 			}
 
 			t.Logf("Verify: Score")

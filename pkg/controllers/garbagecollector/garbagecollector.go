@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
@@ -30,7 +31,6 @@ import (
 
 	"volcano.sh/apis/pkg/apis/batch/v1alpha1"
 	vcclientset "volcano.sh/apis/pkg/client/clientset/versioned"
-	informerfactory "volcano.sh/apis/pkg/client/informers/externalversions"
 	vcinformer "volcano.sh/apis/pkg/client/informers/externalversions"
 	batchinformers "volcano.sh/apis/pkg/client/informers/externalversions/batch/v1alpha1"
 	batchlisters "volcano.sh/apis/pkg/client/listers/batch/v1alpha1"
@@ -63,6 +63,8 @@ type gccontroller struct {
 
 	// queues that need to be updated.
 	queue workqueue.RateLimitingInterface
+
+	workers uint32
 }
 
 func (gc *gccontroller) Name() string {
@@ -73,7 +75,7 @@ func (gc *gccontroller) Name() string {
 func (gc *gccontroller) Initialize(opt *framework.ControllerOption) error {
 	gc.vcClient = opt.VolcanoClient
 
-	factory := informerfactory.NewSharedInformerFactory(gc.vcClient, 0)
+	factory := opt.VCSharedInformerFactory
 	jobInformer := factory.Batch().V1alpha1().Jobs()
 
 	gc.vcInformerFactory = factory
@@ -81,6 +83,7 @@ func (gc *gccontroller) Initialize(opt *framework.ControllerOption) error {
 	gc.jobLister = jobInformer.Lister()
 	gc.jobSynced = jobInformer.Informer().HasSynced
 	gc.queue = workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
+	gc.workers = opt.WorkerThreadsForGC
 
 	jobInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    gc.addJob,
@@ -105,7 +108,9 @@ func (gc *gccontroller) Run(stopCh <-chan struct{}) {
 		}
 	}
 
-	go wait.Until(gc.worker, time.Second, stopCh)
+	for i := 0; i < int(gc.workers); i++ {
+		go wait.Until(gc.worker, time.Second, stopCh)
+	}
 
 	<-stopCh
 }
@@ -228,7 +233,12 @@ func (gc *gccontroller) processJob(key string) error {
 		Preconditions:     &metav1.Preconditions{UID: &fresh.UID},
 	}
 	klog.V(4).Infof("Cleaning up Job %s/%s", namespace, name)
-	return gc.vcClient.BatchV1alpha1().Jobs(fresh.Namespace).Delete(context.TODO(), fresh.Name, options)
+	err = gc.vcClient.BatchV1alpha1().Jobs(fresh.Namespace).Delete(context.TODO(), fresh.Name, options)
+	if apierrors.IsNotFound(err) {
+		// if the job had deleted, it will not be added to queue
+		return nil
+	}
+	return err
 }
 
 // processTTL checks whether a given Job's TTL has expired, and add it to the queue after the TTL is expected to expire

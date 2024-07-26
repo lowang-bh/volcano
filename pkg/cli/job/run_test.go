@@ -17,13 +17,14 @@ limitations under the License.
 package job
 
 import (
+	"context"
 	"encoding/json"
-	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
+	"volcano.sh/volcano/pkg/cli/util"
 
 	"github.com/spf13/cobra"
 
@@ -50,7 +51,7 @@ func TestCreateJob(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	err = ioutil.WriteFile(fileName, val, os.ModePerm)
+	err = os.WriteFile(fileName, val, os.ModePerm)
 	if err != nil {
 		panic(err)
 	}
@@ -74,7 +75,7 @@ func TestCreateJob(t *testing.T) {
 
 	for i, testcase := range testCases {
 		launchJobFlags = &runFlags{
-			commonFlags: commonFlags{
+			CommonFlags: util.CommonFlags{
 				Master: server.URL,
 			},
 			Name:      "test",
@@ -82,7 +83,7 @@ func TestCreateJob(t *testing.T) {
 			Requests:  "cpu=1000m,memory=100Mi",
 		}
 
-		err := RunJob()
+		err := RunJob(context.TODO())
 		if err != nil {
 			t.Errorf("case %d (%s): expected: %v, got %v ", i, testcase.Name, testcase.ExpectValue, err)
 		}

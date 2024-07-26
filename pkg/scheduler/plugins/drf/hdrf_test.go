@@ -1,25 +1,20 @@
 package drf
 
 import (
-	"flag"
 	"fmt"
-	"reflect"
 	"testing"
 
-	"github.com/agiledragon/gomonkey/v2"
 	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/record"
-	"k8s.io/klog/v2"
+	"k8s.io/apimachinery/pkg/api/equality"
 
 	schedulingv1 "volcano.sh/apis/pkg/apis/scheduling/v1beta1"
 	"volcano.sh/volcano/cmd/scheduler/app/options"
 	"volcano.sh/volcano/pkg/scheduler/actions/allocate"
 	"volcano.sh/volcano/pkg/scheduler/api"
-	"volcano.sh/volcano/pkg/scheduler/cache"
 	"volcano.sh/volcano/pkg/scheduler/conf"
 	"volcano.sh/volcano/pkg/scheduler/framework"
 	"volcano.sh/volcano/pkg/scheduler/plugins/proportion"
+	"volcano.sh/volcano/pkg/scheduler/uthelper"
 	"volcano.sh/volcano/pkg/scheduler/util"
 )
 
@@ -28,10 +23,18 @@ func makePods(num int, cpu, mem, podGroupName string) []*v1.Pod {
 	for i := 0; i < num; i++ {
 		pods = append(pods, util.BuildPod("default",
 			fmt.Sprintf("%s-p%d", podGroupName, i), "",
-			v1.PodPending, util.BuildResourceList(cpu, mem),
+			v1.PodPending, api.BuildResourceList(cpu, mem),
 			podGroupName, make(map[string]string), make(map[string]string)))
 	}
 	return pods
+}
+
+func mergePods(pods ...[]*v1.Pod) []*v1.Pod {
+	ret := make([]*v1.Pod, 0)
+	for _, items := range pods {
+		ret = append(ret, items...)
+	}
+	return ret
 }
 
 type queueSpec struct {
@@ -49,252 +52,162 @@ type pgSpec struct {
 }
 
 func TestHDRF(t *testing.T) {
-	klog.InitFlags(nil)
-	flag.Set("v", "4")
-	flag.Set("alsologtostderr", "true")
-	var tmp *cache.SchedulerCache
-	patches := gomonkey.ApplyMethod(reflect.TypeOf(tmp), "AddBindTask", func(scCache *cache.SchedulerCache, task *api.TaskInfo) error {
-		scCache.Binder.Bind(nil, []*api.TaskInfo{task})
-		return nil
-	})
-	defer patches.Reset()
+	options.Default()
 
-	patchUpdateQueueStatus := gomonkey.ApplyMethod(reflect.TypeOf(tmp), "UpdateQueueStatus", func(scCache *cache.SchedulerCache, queue *api.QueueInfo) error {
-		return nil
-	})
-	defer patchUpdateQueueStatus.Reset()
-
-	s := options.NewServerOption()
-	s.MinNodesToFind = 100
-	s.PercentageOfNodesToFind = 100
-	s.RegisterOptions()
-
-	framework.RegisterPluginBuilder(PluginName, New)
-	framework.RegisterPluginBuilder("proportion", proportion.New)
-	defer framework.CleanupPluginBuilders()
-
+	plugins := map[string]framework.PluginBuilder{PluginName: New, proportion.PluginName: proportion.New}
 	tests := []struct {
-		name       string
-		pgSpecs    []pgSpec
-		nodes      []*v1.Node
-		queues     []*schedulingv1.Queue
-		queueSpecs []queueSpec
-		expected   map[string]string
+		uthelper.TestCommonStruct
+		expected map[string]*api.Resource
 	}{
 		{
-			name: "rescaling test",
-			pgSpecs: []pgSpec{
-				{
-					taskNum: 10,
-					cpu:     "1",
-					mem:     "1G",
-					pg:      "pg1",
-					queue:   "root-sci",
+			TestCommonStruct: uthelper.TestCommonStruct{
+				Name:    "rescaling test",
+				Plugins: plugins,
+				PodGroups: []*schedulingv1.PodGroup{
+					util.BuildPodGroup("pg1", "default", "root-sci", 0, nil, schedulingv1.PodGroupInqueue),
+					util.BuildPodGroup("pg21", "default", "root-eng-dev", 0, nil, schedulingv1.PodGroupInqueue),
+					util.BuildPodGroup("pg22", "default", "root-eng-prod", 0, nil, schedulingv1.PodGroupInqueue),
 				},
-				{
-					taskNum: 10,
-					cpu:     "1",
-					mem:     "0G",
-					pg:      "pg21",
-					queue:   "root-eng-dev",
+				Pods: mergePods(
+					makePods(10, "1", "1G", "pg1"),
+					makePods(10, "1", "0G", "pg21"),
+					makePods(10, "0", "1G", "pg22"),
+				),
+				Queues: []*schedulingv1.Queue{
+					util.BuildQueueWithAnnos("root-sci", 1, nil, map[string]string{
+						schedulingv1.KubeHierarchyAnnotationKey:       "root/sci",
+						schedulingv1.KubeHierarchyWeightAnnotationKey: "100/50",
+					}),
+					util.BuildQueueWithAnnos("root-eng-dev", 1, nil, map[string]string{
+						schedulingv1.KubeHierarchyAnnotationKey:       "root/eng/dev",
+						schedulingv1.KubeHierarchyWeightAnnotationKey: "100/50/50",
+					}),
+					util.BuildQueueWithAnnos("root-eng-prod", 1, nil, map[string]string{
+						schedulingv1.KubeHierarchyAnnotationKey:       "root/eng/prod",
+						schedulingv1.KubeHierarchyWeightAnnotationKey: "100/50/50",
+					}),
 				},
-				{
-					taskNum: 10,
-					cpu:     "0",
-					mem:     "1G",
-					pg:      "pg22",
-					queue:   "root-eng-prod",
-				},
+				Nodes: []*v1.Node{util.BuildNode("n", api.BuildResourceList("10", "10G", []api.ScalarResource{{Name: "pods", Value: "50"}}...), make(map[string]string))},
 			},
-			nodes: []*v1.Node{util.BuildNode("n",
-				util.BuildResourceList("10", "10G"),
-				make(map[string]string))},
-			queueSpecs: []queueSpec{
-				{
-					name:      "root-sci",
-					hierarchy: "root/sci",
-					weights:   "100/50",
+			expected: map[string]*api.Resource{
+				"pg1": {
+					MilliCPU:        5000,
+					Memory:          5000000000,
+					ScalarResources: map[v1.ResourceName]float64{"pods": 5},
 				},
-				{
-					name:      "root-eng-dev",
-					hierarchy: "root/eng/dev",
-					weights:   "100/50/50",
+				"pg21": {
+					MilliCPU:        5000,
+					Memory:          0,
+					ScalarResources: map[v1.ResourceName]float64{"pods": 5},
 				},
-				{
-					name:      "root-eng-prod",
-					hierarchy: "root/eng/prod",
-					weights:   "100/50/50",
+				"pg22": {
+					MilliCPU:        0,
+					Memory:          5000000000,
+					ScalarResources: map[v1.ResourceName]float64{"pods": 5},
 				},
-			},
-			expected: map[string]string{
-				"pg1":  "cpu 5000.00, memory 5000000000.00, nvidia.com/gpu 0.00",
-				"pg21": "cpu 5000.00, memory 0.00, nvidia.com/gpu 0.00",
-				"pg22": "cpu 0.00, memory 5000000000.00, nvidia.com/gpu 0.00",
 			},
 		},
 		{
-			name: "blocking nodes test",
-			pgSpecs: []pgSpec{
-				{
-					taskNum: 30,
-					cpu:     "1",
-					mem:     "0G",
-					pg:      "pg1",
-					queue:   "root-pg1",
+			TestCommonStruct: uthelper.TestCommonStruct{
+				Name:    "blocking nodes test",
+				Plugins: plugins,
+				PodGroups: []*schedulingv1.PodGroup{
+					util.BuildPodGroup("pg1", "default", "root-pg1", 0, nil, schedulingv1.PodGroupInqueue),
+					util.BuildPodGroup("pg2", "default", "root-pg2", 0, nil, schedulingv1.PodGroupInqueue),
+					util.BuildPodGroup("pg31", "default", "root-pg3-pg31", 0, nil, schedulingv1.PodGroupInqueue),
+					util.BuildPodGroup("pg32", "default", "root-pg3-pg31", 0, nil, schedulingv1.PodGroupInqueue),
+					util.BuildPodGroup("pg4", "default", "root-pg4", 0, nil, schedulingv1.PodGroupInqueue),
 				},
-				{
-					taskNum: 30,
-					cpu:     "1",
-					mem:     "0G",
-					pg:      "pg2",
-					queue:   "root-pg2",
+				Pods: mergePods(
+					makePods(30, "1", "0G", "pg1"),
+					makePods(30, "1", "0G", "pg2"),
+					makePods(30, "1", "0G", "pg31"),
+					makePods(30, "0", "1G", "pg32"),
+					makePods(30, "0", "1G", "pg4"),
+				),
+				Queues: []*schedulingv1.Queue{
+					util.BuildQueueWithAnnos("root-pg1", 1, nil, map[string]string{
+						schedulingv1.KubeHierarchyAnnotationKey:       "root/pg1",
+						schedulingv1.KubeHierarchyWeightAnnotationKey: "100/25",
+					}),
+					util.BuildQueueWithAnnos("root-pg2", 1, nil, map[string]string{
+						schedulingv1.KubeHierarchyAnnotationKey:       "root/pg2",
+						schedulingv1.KubeHierarchyWeightAnnotationKey: "100/25",
+					}),
+					util.BuildQueueWithAnnos("root-pg3-pg31", 1, nil, map[string]string{
+						schedulingv1.KubeHierarchyAnnotationKey:       "root/pg3/pg31",
+						schedulingv1.KubeHierarchyWeightAnnotationKey: "100/25/50",
+					}),
+					util.BuildQueueWithAnnos("root-pg3-pg32", 1, nil, map[string]string{
+						schedulingv1.KubeHierarchyAnnotationKey:       "root/pg3/pg32",
+						schedulingv1.KubeHierarchyWeightAnnotationKey: "100/25/50",
+					}),
+					util.BuildQueueWithAnnos("root-pg4", 1, nil, map[string]string{
+						schedulingv1.KubeHierarchyAnnotationKey:       "root/pg4",
+						schedulingv1.KubeHierarchyWeightAnnotationKey: "100/25",
+					}),
 				},
-				{
-					taskNum: 30,
-					cpu:     "1",
-					mem:     "0G",
-					pg:      "pg31",
-					queue:   "root-pg3-pg31",
+				Nodes: []*v1.Node{util.BuildNode("n", api.BuildResourceList("30", "30G", []api.ScalarResource{{Name: "pods", Value: "500"}}...), make(map[string]string))},
+			},
+
+			expected: map[string]*api.Resource{
+				"pg1": {
+					MilliCPU:        10000,
+					Memory:          0,
+					ScalarResources: map[v1.ResourceName]float64{"pods": 10},
 				},
-				{
-					taskNum: 30,
-					cpu:     "0",
-					mem:     "1G",
-					pg:      "pg32",
-					queue:   "root-pg3-pg32",
+				"pg2": {
+					MilliCPU:        10000,
+					Memory:          0,
+					ScalarResources: map[v1.ResourceName]float64{"pods": 10},
 				},
-				{
-					taskNum: 30,
-					cpu:     "0",
-					mem:     "1G",
-					pg:      "pg4",
-					queue:   "root-pg4",
+				"pg31": {
+					MilliCPU:        10000,
+					Memory:          0,
+					ScalarResources: map[v1.ResourceName]float64{"pods": 10},
+				},
+				"pg32": {
+					MilliCPU:        0,
+					Memory:          15000000000,
+					ScalarResources: map[v1.ResourceName]float64{"pods": 15},
+				},
+				"pg4": {
+					MilliCPU:        0,
+					Memory:          15000000000,
+					ScalarResources: map[v1.ResourceName]float64{"pods": 15},
 				},
 			},
-			nodes: []*v1.Node{util.BuildNode("n",
-				util.BuildResourceList("30", "30G"),
-				make(map[string]string))},
-			queueSpecs: []queueSpec{
+		},
+	}
+	trueValue := true
+	tiers := []conf.Tier{
+		{
+			Plugins: []conf.PluginOption{
 				{
-					name:      "root-pg1",
-					hierarchy: "root/pg1",
-					weights:   "100/25",
+					Name:              PluginName,
+					EnabledHierarchy:  &trueValue,
+					EnabledQueueOrder: &trueValue,
+					EnabledJobOrder:   &trueValue,
 				},
 				{
-					name:      "root-pg2",
-					hierarchy: "root/pg2",
-					weights:   "100/25",
+					Name:               "proportion",
+					EnabledJobEnqueued: &trueValue,
+					EnabledQueueOrder:  &trueValue,
+					EnabledReclaimable: &trueValue,
 				},
-				{
-					name:      "root-pg3-pg31",
-					hierarchy: "root/pg3/pg31",
-					weights:   "100/25/50",
-				},
-				{
-					name:      "root-pg3-pg32",
-					hierarchy: "root/pg3/pg32",
-					weights:   "100/25/50",
-				},
-				{
-					name:      "root-pg4",
-					hierarchy: "root/pg4",
-					weights:   "100/25",
-				},
-			},
-			expected: map[string]string{
-				"pg1":  "cpu 10000.00, memory 0.00, nvidia.com/gpu 0.00",
-				"pg2":  "cpu 10000.00, memory 0.00, nvidia.com/gpu 0.00",
-				"pg31": "cpu 10000.00, memory 0.00, nvidia.com/gpu 0.00",
-				"pg32": "cpu 0.00, memory 15000000000.00, nvidia.com/gpu 0.00",
-				"pg4":  "cpu 0.00, memory 15000000000.00, nvidia.com/gpu 0.00",
 			},
 		},
 	}
 	for _, test := range tests {
-		if test.name == "blocking nodes test" {
-			// TODO(wangyang0616): First make sure that ut can run, and then fix the failed ut later
-			// See issue for details: https://github.com/volcano-sh/volcano/issues/2810
-			t.Skip("Test cases are not as expected, fixed later. see issue: #2810")
-		}
-
-		binder := &util.FakeBinder{
-			Binds:   map[string]string{},
-			Channel: make(chan string),
-		}
-		schedulerCache := &cache.SchedulerCache{
-			Nodes:         make(map[string]*api.NodeInfo),
-			Jobs:          make(map[api.JobID]*api.JobInfo),
-			Queues:        make(map[api.QueueID]*api.QueueInfo),
-			Binder:        binder,
-			StatusUpdater: &util.FakeStatusUpdater{},
-			VolumeBinder:  &util.FakeVolumeBinder{},
-			Recorder:      record.NewFakeRecorder(100),
-		}
-		for _, node := range test.nodes {
-			schedulerCache.AddNode(node)
-		}
-		for _, q := range test.queueSpecs {
-			schedulerCache.AddQueueV1beta1(
-				&schedulingv1.Queue{
-					ObjectMeta: metav1.ObjectMeta{
-						Name: q.name,
-						Annotations: map[string]string{
-							schedulingv1.KubeHierarchyAnnotationKey:       q.hierarchy,
-							schedulingv1.KubeHierarchyWeightAnnotationKey: q.weights,
-						},
-					},
-					Spec: schedulingv1.QueueSpec{
-						Weight: 1,
-					},
-				})
-		}
-		for _, pgSpec := range test.pgSpecs {
-			pods := makePods(pgSpec.taskNum, pgSpec.cpu, pgSpec.mem, pgSpec.pg)
-			for _, pod := range pods {
-				schedulerCache.AddPod(pod)
+		t.Run(t.Name(), func(t *testing.T) {
+			ssn := test.RegisterSession(tiers, nil)
+			defer test.Close()
+			test.Run([]framework.Action{allocate.New()})
+			for _, job := range ssn.Jobs {
+				if equality.Semantic.DeepEqual(test.expected, job.Allocated) {
+					t.Fatalf("%s: job %s expected resource %s, but got %s", test.Name, job.Name, test.expected[job.Name], job.Allocated)
+				}
 			}
-			schedulerCache.AddPodGroupV1beta1(&schedulingv1.PodGroup{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      pgSpec.pg,
-					Namespace: "default",
-				},
-				Spec: schedulingv1.PodGroupSpec{
-					Queue: pgSpec.queue,
-				},
-				Status: schedulingv1.PodGroupStatus{
-					Phase: schedulingv1.PodGroupInqueue,
-				},
-			})
-		}
-		trueValue := true
-		ssn := framework.OpenSession(schedulerCache, []conf.Tier{
-			{
-				Plugins: []conf.PluginOption{
-					{
-						Name:              PluginName,
-						EnabledHierarchy:  &trueValue,
-						EnabledQueueOrder: &trueValue,
-						EnabledJobOrder:   &trueValue,
-					},
-					{
-						Name:               "proportion",
-						EnabledJobEnqueued: &trueValue,
-						EnabledQueueOrder:  &trueValue,
-						EnabledReclaimable: &trueValue,
-					},
-				},
-			},
-		}, nil)
-		defer framework.CloseSession(ssn)
-		allocateAction := allocate.New()
-
-		allocateAction.Execute(ssn)
-
-		for _, job := range ssn.Jobs {
-			if test.expected[job.Name] != job.Allocated.String() {
-				t.Fatalf("%s: job %s expected resource %s, but got %s", test.name, job.Name, test.expected[job.Name], job.Allocated)
-			}
-		}
-
+		})
 	}
 }

@@ -21,6 +21,8 @@ const (
 	Volcano = "volcano"
 	// JobFlow kind of jobFlow
 	JobFlow = "JobFlow"
-	// CreatedByJobTemplate the vcjob annotation of created by jobTemplate
+	// CreatedByJobTemplate the vcjob annotation and label of created by jobTemplate
 	CreatedByJobTemplate = "volcano.sh/createdByJobTemplate"
+	// CreatedByJobFlow the vcjob annotation and label of created by jobFlow
+	CreatedByJobFlow = "volcano.sh/createdByJobFlow"
 )

@@ -18,9 +18,9 @@ package proportion
 
 import (
 	"math"
-	"reflect"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/klog/v2"
 
 	"volcano.sh/apis/pkg/apis/scheduling"
@@ -121,7 +121,8 @@ func (pp *proportionPlugin) OnSessionOpen(ssn *framework.Session) {
 			if attr.capability == nil {
 				attr.realCapability = realCapability
 			} else {
-				attr.realCapability = helpers.Min(realCapability, attr.capability)
+				realCapability.MinDimensionResource(attr.capability, api.Infinity)
+				attr.realCapability = realCapability
 			}
 			pp.queueOpts[job.Queue] = attr
 			klog.V(4).Infof("Added Queue <%s> attributes.", job.Queue)
@@ -159,22 +160,25 @@ func (pp *proportionPlugin) OnSessionOpen(ssn *framework.Session) {
 			attr.name, attr.allocated.String(), attr.request.String(), attr.inqueue.String(), attr.elastic.String())
 	}
 
-	for queueID, queueInfo := range ssn.Queues {
-		if _, ok := pp.queueOpts[queueID]; !ok {
-			metrics.UpdateQueueAllocated(queueInfo.Name, 0, 0)
-		}
-	}
-
 	// Record metrics
-	for _, attr := range pp.queueOpts {
-		metrics.UpdateQueueAllocated(attr.name, attr.allocated.MilliCPU, attr.allocated.Memory)
-		metrics.UpdateQueueRequest(attr.name, attr.request.MilliCPU, attr.request.Memory)
-		metrics.UpdateQueueWeight(attr.name, attr.weight)
-		queue := ssn.Queues[attr.queueID]
-		metrics.UpdateQueuePodGroupInqueueCount(attr.name, queue.Queue.Status.Inqueue)
-		metrics.UpdateQueuePodGroupPendingCount(attr.name, queue.Queue.Status.Pending)
-		metrics.UpdateQueuePodGroupRunningCount(attr.name, queue.Queue.Status.Running)
-		metrics.UpdateQueuePodGroupUnknownCount(attr.name, queue.Queue.Status.Unknown)
+	for queueID, queueInfo := range ssn.Queues {
+		if attr, ok := pp.queueOpts[queueID]; ok {
+			metrics.UpdateQueueAllocated(attr.name, attr.allocated.MilliCPU, attr.allocated.Memory)
+			metrics.UpdateQueueRequest(attr.name, attr.request.MilliCPU, attr.request.Memory)
+			metrics.UpdateQueueWeight(attr.name, attr.weight)
+			queue := ssn.Queues[attr.queueID]
+			metrics.UpdateQueuePodGroupInqueueCount(attr.name, queue.Queue.Status.Inqueue)
+			metrics.UpdateQueuePodGroupPendingCount(attr.name, queue.Queue.Status.Pending)
+			metrics.UpdateQueuePodGroupRunningCount(attr.name, queue.Queue.Status.Running)
+			metrics.UpdateQueuePodGroupUnknownCount(attr.name, queue.Queue.Status.Unknown)
+			continue
+		}
+		metrics.UpdateQueueAllocated(queueInfo.Name, 0, 0)
+		metrics.UpdateQueueRequest(queueInfo.Name, 0, 0)
+		metrics.UpdateQueuePodGroupInqueueCount(queueInfo.Name, 0)
+		metrics.UpdateQueuePodGroupPendingCount(queueInfo.Name, 0)
+		metrics.UpdateQueuePodGroupRunningCount(queueInfo.Name, 0)
+		metrics.UpdateQueuePodGroupUnknownCount(queueInfo.Name, 0)
 	}
 
 	remaining := pp.totalResource.Clone()
@@ -222,7 +226,7 @@ func (pp *proportionPlugin) OnSessionOpen(ssn *framework.Session) {
 			if attr.request.LessEqual(attr.deserved, api.Zero) {
 				meet[attr.queueID] = struct{}{}
 				klog.V(4).Infof("queue <%s> is meet", attr.name)
-			} else if reflect.DeepEqual(attr.deserved, oldDeserved) {
+			} else if equality.Semantic.DeepEqual(attr.deserved, oldDeserved) {
 				meet[attr.queueID] = struct{}{}
 				klog.V(4).Infof("queue <%s> is meet cause of the capability", attr.name)
 			}
@@ -240,7 +244,7 @@ func (pp *proportionPlugin) OnSessionOpen(ssn *framework.Session) {
 
 		remaining.Sub(increasedDeserved).Add(decreasedDeserved)
 		klog.V(4).Infof("Remaining resource is  <%s>", remaining)
-		if remaining.IsEmpty() || reflect.DeepEqual(remaining, oldRemaining) {
+		if remaining.IsEmpty() || equality.Semantic.DeepEqual(remaining, oldRemaining) {
 			klog.V(4).Infof("Exiting when remaining is empty or no queue has more resource request:  <%v>", remaining)
 			break
 		}

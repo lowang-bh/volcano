@@ -23,6 +23,7 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 	v1helper "k8s.io/kubernetes/pkg/scheduler/util"
 
@@ -77,6 +78,7 @@ func NewResource(rl v1.ResourceList) *Resource {
 			r.Memory += float64(rQuant.Value())
 		case v1.ResourcePods:
 			r.MaxTaskNum += int(rQuant.Value())
+			r.AddScalar(rName, float64(rQuant.Value()))
 		case v1.ResourceEphemeralStorage:
 			r.AddScalar(rName, float64(rQuant.MilliValue()))
 		default:
@@ -86,16 +88,17 @@ func NewResource(rl v1.ResourceList) *Resource {
 			//NOTE: When converting this back to k8s resource, we need record the format as well as / 1000
 			if v1helper.IsScalarResourceName(rName) {
 				ignore := false
-				for _, val := range IgnoredDevicesList {
-					if strings.Compare(rName.String(), val) == 0 {
+				IgnoredDevicesList.Range(func(_ int, val string) bool {
+					if rName.String() == val {
 						ignore = true
-						break
+						return false
 					}
-				}
+					return true
+				})
 				if !ignore {
 					r.AddScalar(rName, float64(rQuant.MilliValue()))
 				} else {
-					klog.V(4).Infof("Ignoring resource", rName.String())
+					klog.V(4).Infof("Ignoring resource %s", rName.String())
 				}
 			}
 		}
@@ -192,13 +195,24 @@ func (r *Resource) Get(rn v1.ResourceName) float64 {
 	}
 }
 
-// IsEmpty returns false if any kind of resource is not less than min value, otherwise returns true
+// Skip checking "pods" resource.
+// All pods request one "pods" resource now, no need to check it
+var ignoredScalarResources = sets.NewString(string(v1.ResourcePods))
+
+func IsIgnoredScalarResource(name v1.ResourceName) bool {
+	return ignoredScalarResources.Has(string(name))
+}
+
+// IsEmpty returns false if any kind of resource other than IgnoredResources is not less than min value, otherwise returns true
 func (r *Resource) IsEmpty() bool {
 	if !(r.MilliCPU < minResource && r.Memory < minResource) {
 		return false
 	}
 
-	for _, rQuant := range r.ScalarResources {
+	for rName, rQuant := range r.ScalarResources {
+		if IsIgnoredScalarResource(rName) {
+			continue
+		}
 		if rQuant >= minResource {
 			return false
 		}
@@ -244,6 +258,16 @@ func (r *Resource) Add(rr *Resource) *Resource {
 // Sub subtracts two Resource objects with assertion.
 func (r *Resource) Sub(rr *Resource) *Resource {
 	assert.Assertf(rr.LessEqual(r, Zero), "resource is not sufficient to do operation: <%v> sub <%v>", r, rr)
+	return r.sub(rr)
+}
+
+// SubWithoutAssert subtracts two Resource objects without assertion,
+// this function is added because some resource subtraction allows negative results, while others do not.
+func (r *Resource) SubWithoutAssert(rr *Resource) *Resource {
+	ok, resources := rr.LessEqualWithResourcesName(r, Zero)
+	if !ok {
+		klog.Errorf("resources <%v> are not sufficient to do operation: <%v> sub <%v>", resources, r, rr)
+	}
 	return r.sub(rr)
 }
 

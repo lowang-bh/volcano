@@ -99,7 +99,7 @@ type VolumeBinder interface {
 
 // Binder interface for binding task and hostname
 type Binder interface {
-	Bind(kubeClient kubernetes.Interface, tasks []*api.TaskInfo) ([]*api.TaskInfo, error)
+	Bind(kubeClient kubernetes.Interface, tasks []*api.TaskInfo) ([]*api.TaskInfo, []error)
 }
 
 // Evictor interface for evict pods
@@ -109,8 +109,9 @@ type Evictor interface {
 
 // StatusUpdater updates pod with given PodCondition
 type StatusUpdater interface {
-	UpdatePodCondition(pod *v1.Pod, podCondition *v1.PodCondition) (*v1.Pod, error)
+	UpdatePodStatus(pod *v1.Pod) (*v1.Pod, error)
 	UpdatePodGroup(pg *api.PodGroup) (*api.PodGroup, error)
+	UpdateQueueStatus(queue *api.QueueInfo) error
 }
 
 // BatchBinder updates podgroup or job information

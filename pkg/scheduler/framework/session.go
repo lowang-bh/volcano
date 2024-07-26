@@ -18,9 +18,9 @@ package framework
 
 import (
 	"fmt"
-	"reflect"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
@@ -88,6 +88,9 @@ type Session struct {
 	preemptableFns    map[string]api.EvictableFn
 	reclaimableFns    map[string]api.EvictableFn
 	overusedFns       map[string]api.ValidateFn
+	// preemptiveFns means whether current queue can reclaim from other queue,
+	// while reclaimableFns means whether current queue's resources can be reclaimed.
+	preemptiveFns     map[string]api.ValidateFn
 	allocatableFns    map[string]api.AllocatableFn
 	jobReadyFns       map[string]api.ValidateFn
 	jobPipelinedFns   map[string]api.VoteFn
@@ -133,6 +136,7 @@ func openSession(cache cache.Cache) *Session {
 		preemptableFns:    map[string]api.EvictableFn{},
 		reclaimableFns:    map[string]api.EvictableFn{},
 		overusedFns:       map[string]api.ValidateFn{},
+		preemptiveFns:     map[string]api.ValidateFn{},
 		allocatableFns:    map[string]api.AllocatableFn{},
 		jobReadyFns:       map[string]api.ValidateFn{},
 		jobPipelinedFns:   map[string]api.VoteFn{},
@@ -206,7 +210,7 @@ func updateQueueStatus(ssn *Session) {
 	for queueID := range ssn.Queues {
 		// convert api.Resource to v1.ResourceList
 		var queueStatus = util.ConvertRes2ResList(allocatedResources[queueID]).DeepCopy()
-		if reflect.DeepEqual(ssn.Queues[queueID].Queue.Status.Allocated, queueStatus) {
+		if equality.Semantic.DeepEqual(ssn.Queues[queueID].Queue.Status.Allocated, queueStatus) {
 			klog.V(5).Infof("Queue <%s> allocated resource keeps equal, no need to update queue status <%v>.",
 				queueID, ssn.Queues[queueID].Queue.Status.Allocated)
 			continue
@@ -281,6 +285,32 @@ func jobStatus(ssn *Session, jobInfo *api.JobInfo) scheduling.PodGroupStatus {
 	status.Succeeded = int32(len(jobInfo.TaskStatusIndex[api.Succeeded]))
 
 	return status
+}
+
+// GetUnschedulableAndUnresolvableNodesForTask filter out those node that has UnschedulableAndUnresolvable
+func (ssn *Session) GetUnschedulableAndUnresolvableNodesForTask(task *api.TaskInfo) []*api.NodeInfo {
+	fitErrors, ok1 := ssn.Jobs[task.Job]
+	if !ok1 {
+		return ssn.NodeList
+	}
+	fitErr, ok2 := fitErrors.NodesFitErrors[task.UID]
+	if !ok2 {
+		return ssn.NodeList
+	}
+
+	skipNodes := fitErr.GetUnschedulableAndUnresolvableNodes()
+	if len(skipNodes) == 0 {
+		return ssn.NodeList
+	}
+
+	ret := make([]*api.NodeInfo, 0, len(ssn.Nodes))
+	for _, node := range ssn.Nodes {
+		if _, ok := skipNodes[node.Name]; !ok {
+			ret = append(ret, node)
+		}
+	}
+
+	return ret
 }
 
 // Statement returns new statement object

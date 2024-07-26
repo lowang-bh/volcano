@@ -29,6 +29,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"volcano.sh/apis/pkg/apis/batch/v1alpha1"
+
 	"volcano.sh/volcano/pkg/controllers/apis"
 )
 
@@ -248,7 +249,7 @@ func (jc *jobCache) DeletePod(pod *v1.Pod) error {
 		return err
 	}
 
-	if jc.jobs[key].Job == nil {
+	if jobTerminated(job) {
 		jc.deleteJob(job)
 	}
 
@@ -376,13 +377,20 @@ func (jc *jobCache) processCleanupJob() bool {
 		klog.V(3).Infof("Job <%s> was deleted.", key)
 	} else {
 		// Retry
-		jc.deleteJob(job)
+		jc.retryDeleteJob(job)
 	}
 	return true
 }
 
 func (jc *jobCache) deleteJob(job *apis.JobInfo) {
 	klog.V(3).Infof("Try to delete Job <%v/%v>",
+		job.Namespace, job.Name)
+
+	jc.deletedJobs.Add(job)
+}
+
+func (jc *jobCache) retryDeleteJob(job *apis.JobInfo) {
+	klog.V(3).Infof("Retry to delete Job <%v/%v>",
 		job.Namespace, job.Name)
 
 	jc.deletedJobs.AddRateLimited(job)

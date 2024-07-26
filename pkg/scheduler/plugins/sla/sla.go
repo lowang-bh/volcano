@@ -30,7 +30,7 @@ const (
 	// PluginName indicates name of volcano scheduler plugin
 	PluginName = "sla"
 	// JobWaitingTime is maximum waiting time that a job could stay Pending in service level agreement
-	// when job waits longer than waiting time, it should be inqueue at once, and cluster should reserve resources for it
+	// when job waits longer than waiting time, it should be enqueue at once, and cluster should reserve resources for it
 	// Valid time units are “ns”, “us” (or “µs”), “ms”, “s”, “m”, “h”
 	JobWaitingTime = "sla-waiting-time"
 )
@@ -73,7 +73,7 @@ tiers:
     arguments:
     sla-waiting-time: 1h2m3s4ms5µs6ns
 
-Meanwhile, use can give individual job waiting time settings for one job via job annotations:
+Meanwhile, user can give individual job waiting time settings for one job via job annotations:
 apiVersion: batch.volcano.sh/v1alpha1
 kind: Job
 metadata:

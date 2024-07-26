@@ -16,43 +16,28 @@ limitations under the License.
 package main
 
 import (
-	"fmt"
 	"os"
-	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
-
-	"k8s.io/apimachinery/pkg/util/wait"
-	"k8s.io/klog/v2"
+	"k8s.io/component-base/cli"
 
 	"volcano.sh/volcano/cmd/cli/util"
 	"volcano.sh/volcano/pkg/cli/vresume"
 )
 
-var logFlushFreq = pflag.Duration("log-flush-frequency", 5*time.Second, "Maximum number of seconds between log flushes")
-
 func main() {
-	// flag.InitFlags()
-	klog.InitFlags(nil)
-
-	// The default klog flush interval is 30 seconds, which is frighteningly long.
-	go wait.Until(klog.Flush, *logFlushFreq, wait.NeverStop)
-	defer klog.Flush()
-
 	rootCmd := cobra.Command{
 		Use:   "vresume",
 		Short: "resume a job",
 		Long:  `resume an aborted job with specified name in default or specified namespace`,
 		Run: func(cmd *cobra.Command, args []string) {
-			util.CheckError(cmd, vresume.ResumeJob())
+			util.CheckError(cmd, vresume.ResumeJob(cmd.Context()))
 		},
 	}
 
 	jobResumeCmd := &rootCmd
 	vresume.InitResumeFlags(jobResumeCmd)
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Printf("Failed to execute vresume: %v\n", err)
-		os.Exit(-2)
-	}
+
+	code := cli.Run(&rootCmd)
+	os.Exit(code)
 }
