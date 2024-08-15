@@ -26,6 +26,7 @@ import (
 	"volcano.sh/volcano/pkg/scheduler/api"
 	"volcano.sh/volcano/pkg/scheduler/conf"
 	"volcano.sh/volcano/pkg/scheduler/framework"
+	"volcano.sh/volcano/pkg/scheduler/plugins/capacity"
 	"volcano.sh/volcano/pkg/scheduler/plugins/conformance"
 	"volcano.sh/volcano/pkg/scheduler/plugins/gang"
 	"volcano.sh/volcano/pkg/scheduler/plugins/priority"
@@ -113,6 +114,75 @@ func TestReclaim(t *testing.T) {
 				{
 					Name:               gang.PluginName,
 					EnabledReclaimable: &trueValue,
+				},
+				{ // proportion plugin will cause deserved resource large than preemptable pods's usage, and return less victims
+					Name:               proportion.PluginName,
+					EnabledReclaimable: &trueValue,
+				},
+				{
+					Name:             priority.PluginName,
+					EnabledJobOrder:  &trueValue,
+					EnabledTaskOrder: &trueValue,
+				},
+			},
+		},
+	}
+	for i, test := range tests {
+		t.Run(test.Name, func(t *testing.T) {
+			test.RegisterSession(tiers, nil)
+			defer test.Close()
+			test.Run([]framework.Action{reclaim})
+			if err := test.CheckAll(i); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestReclaimRevert(t *testing.T) {
+	tests := []uthelper.TestCommonStruct{
+		{
+			Name: "if reclaimed resource cannot meet gang, revert eviction",
+			Plugins: map[string]framework.PluginBuilder{
+				gang.PluginName:     gang.New,
+				capacity.PluginName: capacity.New,
+			},
+			PodGroups: []*schedulingv1beta1.PodGroup{
+				util.BuildPodGroup("pg1", "c1", "q1", 0, nil, schedulingv1beta1.PodGroupInqueue),
+				util.BuildPodGroup("pg2", "c1", "q2", 2, nil, schedulingv1beta1.PodGroupInqueue),
+			},
+			Pods: []*v1.Pod{
+				util.BuildPod("c1", "preemptee1-1", "n1", v1.PodRunning, api.BuildResourceList("1", "1G"), "pg1", map[string]string{schedulingv1beta1.PodPreemptable: "true"}, make(map[string]string)),
+				util.BuildPod("c1", "preemptee1-2", "n1", v1.PodRunning, api.BuildResourceList("1", "1G"), "pg1", map[string]string{schedulingv1beta1.PodPreemptable: "true"}, make(map[string]string)),
+				util.BuildPod("c1", "preemptee1-3", "n1", v1.PodRunning, api.BuildResourceList("1", "1G"), "pg1", map[string]string{schedulingv1beta1.PodPreemptable: "true"}, make(map[string]string)),
+				util.BuildPod("c1", "preemptor1-1", "", v1.PodPending, api.BuildResourceList("2", "2G"), "pg2", make(map[string]string), make(map[string]string)),
+				util.BuildPod("c1", "preemptor1-2", "", v1.PodPending, api.BuildResourceList("2", "2G"), "pg2", make(map[string]string), make(map[string]string)),
+			},
+			Nodes: []*v1.Node{
+				util.BuildNode("n1", api.BuildResourceList("3", "3Gi", []api.ScalarResource{{Name: "pods", Value: "10"}}...), make(map[string]string)),
+			},
+			Queues: []*schedulingv1beta1.Queue{
+				util.BuildQueueWithResourcesQuantity("q1", nil, api.BuildResourceList("3", "3G")),
+				util.BuildQueueWithResourcesQuantity("q2", api.BuildResourceList("2", "2G"), api.BuildResourceList("3", "3G")),
+			},
+			ExpectEvictNum: 2,
+			ExpectEvicted:  []string{"c1/preemptee1-2", "c1/preemptee1-3"}, // actually, should not evict any pod and revert
+		},
+	}
+	reclaim := New()
+	trueValue := true
+	tiers := []conf.Tier{
+		{
+			Plugins: []conf.PluginOption{
+				{
+					Name:               conformance.PluginName,
+					EnabledReclaimable: &trueValue,
+				},
+				{
+					Name:                gang.PluginName,
+					EnabledReclaimable:  &trueValue,
+					EnabledJobReady:     &trueValue,
+					EnabledJobPipelined: &trueValue,
 				},
 				{ // proportion plugin will cause deserved resource large than preemptable pods's usage, and return less victims
 					Name:               proportion.PluginName,

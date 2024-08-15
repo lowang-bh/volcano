@@ -126,6 +126,7 @@ func (ra *Action) Execute(ssn *framework.Session) {
 		}
 
 		assigned := false
+		stmt := ssn.Statement()
 		// we should filter out those nodes that are UnschedulableAndUnresolvable status got in allocate action
 		totalNodes := ssn.GetUnschedulableAndUnresolvableNodesForTask(task)
 		for _, n := range totalNodes {
@@ -182,7 +183,7 @@ func (ra *Action) Execute(ssn *framework.Session) {
 				reclaimee := victimsQueue.Pop().(*api.TaskInfo)
 				klog.Errorf("Try to reclaim Task <%s/%s> for Tasks <%s/%s>",
 					reclaimee.Namespace, reclaimee.Name, task.Namespace, task.Name)
-				if err := ssn.Evict(reclaimee, "reclaim"); err != nil {
+				if err := stmt.Evict(reclaimee, "reclaim"); err != nil {
 					klog.Errorf("Failed to reclaim Task <%s/%s> for Tasks <%s/%s>: %v",
 						reclaimee.Namespace, reclaimee.Name, task.Namespace, task.Name, err)
 					continue
@@ -205,8 +206,10 @@ func (ra *Action) Execute(ssn *framework.Session) {
 
 				// Ignore error of pipeline, will be corrected in next scheduling loop.
 				assigned = true
-
+				stmt.Commit()
 				break
+			}else{
+				stmt.Discard()
 			}
 		}
 
